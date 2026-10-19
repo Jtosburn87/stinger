@@ -1,0 +1,28 @@
+# Mac build on GitHub's Mac runners. Started by hand (Actions tab -> Mac build -> Run workflow) or by a
+# version tag (v0.3.0...), not on every push: Mac minutes count 10x against the private-repo allowance.
+name: Mac build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: [ "v*" ]
+
+jobs:
+  mac:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+
+      - name: Build, test, package
+        run: |
+          chmod +x release-mac.sh
+          ./release-mac.sh
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: Stinger-mac
+          path: dist/*.dmg
+          retention-days: 30

@@ -1,0 +1,104 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Stinger</title>
+<style>
+  body { margin: 0; padding: 12px 10px; background: #2d2d2d; color: #d8d8d8; font: 12px "Segoe UI", Helvetica, Arial, sans-serif; }
+  .row { display: flex; align-items: center; margin: 0 0 8px; }
+  .row label { width: 92px; flex: none; color: #969696; text-align: right; padding-right: 10px; }
+  select { flex: 1; min-width: 0; height: 26px; background: #3d3d3d; color: #d8d8d8; border: 1px solid #555; border-radius: 3px; padding: 0 6px; font: inherit; }
+  .hint { color: #969696; margin: 10px 0 0 102px; line-height: 1.4; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+  <div id="button" class="hidden">
+    <div class="row">
+      <label for="mode">Plays</label>
+      <select id="mode">
+        <option value="shown">Position in the bank Stinger shows</option>
+        <option value="fixed">One fixed button</option>
+      </select>
+    </div>
+    <div class="row" id="bankRow">
+      <label for="buttonBank">Bank</label>
+      <select id="buttonBank"></select>
+    </div>
+    <div class="row">
+      <label for="position">Button</label>
+      <select id="position"></select>
+    </div>
+    <p class="hint">Buttons are numbered across the rows: 1-6 is the top row of Stinger's grid, 19-24 the bottom row.
+      "Position" keys follow Stinger when you change banks.</p>
+  </div>
+
+  <div id="bankAction" class="hidden">
+    <div class="row">
+      <label for="bank">Shows</label>
+      <select id="bank"></select>
+    </div>
+  </div>
+
+<script>
+  let socket = null, context = null, settings = {};
+
+  function connectElgatoStreamDeckSocket (port, uuid, registerEvent, info, actionInfo) {
+    context = uuid;
+    const action = JSON.parse (actionInfo);
+    settings = (action.payload && action.payload.settings) || {};
+    socket = new WebSocket ('ws://127.0.0.1:' + port);
+    socket.onopen = () => socket.send (JSON.stringify ({ event: registerEvent, uuid }));
+    setup (action.action.endsWith ('.bank') ? 'bankAction' : 'button');
+  }
+
+  function save () {
+    if (socket && socket.readyState === WebSocket.OPEN)
+      socket.send (JSON.stringify ({ event: 'setSettings', context, payload: settings }));
+  }
+
+  function fill (select, items) {
+    for (const [value, text] of items) {
+      const o = document.createElement ('option');
+      o.value = value;
+      o.textContent = text;
+      select.appendChild (o);
+    }
+  }
+
+  function letters () {
+    return Array.from ({ length: 8 }, (_, b) => [String (b), 'Bank ' + String.fromCharCode (65 + b)]);
+  }
+
+  function setup (which) {
+    document.getElementById (which).classList.remove ('hidden');
+    if (which === 'button') {
+      const mode = document.getElementById ('mode');
+      const bank = document.getElementById ('buttonBank');
+      const position = document.getElementById ('position');
+      fill (bank, letters());
+      fill (position, Array.from ({ length: 24 }, (_, i) => [String (i + 1), 'Button ' + (i + 1)]));
+      mode.value = settings.mode || 'shown';
+      bank.value = settings.bank || '0';
+      position.value = settings.position || '1';
+      const update = () => {
+        settings = { mode: mode.value, bank: bank.value, position: position.value };
+        document.getElementById ('bankRow').classList.toggle ('hidden', mode.value !== 'fixed');
+        save();
+      };
+      mode.onchange = bank.onchange = position.onchange = update;
+      document.getElementById ('bankRow').classList.toggle ('hidden', mode.value !== 'fixed');
+      if (! settings.position)
+        update();
+    } else {
+      const bank = document.getElementById ('bank');
+      fill (bank, [['next', 'Next bank'], ['previous', 'Previous bank'], ...letters()]);
+      bank.value = settings.bank || 'next';
+      bank.onchange = () => { settings = { bank: bank.value }; save(); };
+      if (! settings.bank)
+        bank.onchange();
+    }
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,78 @@
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+  "UUID": "com.stinger.streamdeck",
+  "Name": "Stinger",
+  "Author": "Stinger",
+  "Description": "Play Stinger's buttons and playlist from Stream Deck: keys show each button's name and colour, light up while it plays and count down.",
+  "Version": "0.1.0.0",
+  "SDKVersion": 2,
+  "CodePath": "plugin.html",
+  "Icon": "images/plugin",
+  "Category": "Stinger",
+  "CategoryIcon": "images/category",
+  "Software": { "MinimumVersion": "6.5" },
+  "OS": [
+    { "Platform": "windows", "MinimumVersion": "10" },
+    { "Platform": "mac", "MinimumVersion": "11" }
+  ],
+  "Actions": [
+    {
+      "UUID": "com.stinger.streamdeck.button",
+      "Name": "Button",
+      "Tooltip": "Plays a Stinger button: a position in the bank Stinger shows, or one fixed button",
+      "Icon": "images/action-button",
+      "PropertyInspectorPath": "pi.html",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "images/key-button", "ShowTitle": false }]
+    },
+    {
+      "UUID": "com.stinger.streamdeck.countdown",
+      "Name": "Countdown",
+      "Tooltip": "Shows the time left of the sting started last (whichever way it was started)",
+      "Icon": "images/action-countdown",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "images/key-countdown", "ShowTitle": false }]
+    },
+    {
+      "UUID": "com.stinger.streamdeck.go",
+      "Name": "GO",
+      "Tooltip": "Plays the next song in the playlist (finishes a Loop until GO)",
+      "Icon": "images/action-go",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "images/key-go", "ShowTitle": false }]
+    },
+    {
+      "UUID": "com.stinger.streamdeck.fadenext",
+      "Name": "Fade to next",
+      "Tooltip": "Crossfades into the next song in the playlist now",
+      "Icon": "images/action-fadenext",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "images/key-fadenext", "ShowTitle": false }]
+    },
+    {
+      "UUID": "com.stinger.streamdeck.stopall",
+      "Name": "Stop all",
+      "Tooltip": "Stops everything now",
+      "Icon": "images/action-stopall",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "images/key-stopall", "ShowTitle": false }]
+    },
+    {
+      "UUID": "com.stinger.streamdeck.fadeall",
+      "Name": "Fade all",
+      "Tooltip": "Fades out everything that's playing",
+      "Icon": "images/action-fadeall",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "images/key-fadeall", "ShowTitle": false }]
+    },
+    {
+      "UUID": "com.stinger.streamdeck.bank",
+      "Name": "Bank",
+      "Tooltip": "Shows a bank in Stinger (or the next / previous one)",
+      "Icon": "images/action-bank",
+      "PropertyInspectorPath": "pi.html",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "images/key-bank", "ShowTitle": false }]
+    }
+  ]
+}
