@@ -301,7 +301,7 @@ bool Downloader::process (Job job)
         const auto directError = now.status;
         for (auto& f : temp.findChildFiles (juce::File::findFiles, false))
             f.deleteFile();
-        downloaded = {};
+        downloaded = juce::File();
         update (id, [] (Job& j) { j.progress = 0.0; j.status = "Trying yt-dlp"; });
         fetched = fetchWithYtDlp (id, job.url, temp, downloaded, title);
         if (! fetched && ! isCancelled (id))
