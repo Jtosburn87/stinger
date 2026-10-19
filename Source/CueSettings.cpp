@@ -111,13 +111,18 @@ CueSettings::CueSettings (ShowController& c) : controller (c), waveform (c), fxP
     {
         if (! updating && settings != nullptr && recordInput.getSelectedId() > 0)
             settings->setValue ("recordInput", recordInput.getSelectedId());
+        if (! updating)
+            applyArm();
     };
     recordButton.setWantsKeyboardFocus (false);
     recordButton.setTooltip ("Record from the input into this button (arm it first; press again to stop)");
     recordButton.onClick = [this] { toggleRecording(); };
     armButton.setWantsKeyboardFocus (false);
     armButton.setClickingTogglesState (true);
-    armButton.setTooltip ("Arm recording: REC only works while this is lit (it switches off after each recording)");
+    armButton.setTooltip ("Arm recording: opens the chosen input and its meter. REC only works while this is lit "
+                          "(it switches off after each recording). Arming / disarming reopens the audio device: "
+                          "the outputs drop out for a moment.");
+    armButton.onClick = [this] { applyArm(); };
     armButton.setColour (juce::TextButton::buttonOnColourId, Look::red.darker (0.2f));
     armButton.setColour (juce::TextButton::textColourOnId, juce::Colours::white);
     armButton.setColour (juce::TextButton::textColourOffId, Look::textDim);
@@ -392,6 +397,8 @@ void CueSettings::fillInputs()
     {
         recordInput.addItem ("No inputs (choose them in Audio)", 1);
         recordInput.setItemEnabled (1, false);
+        armButton.setToggleState (false, juce::dontSendNotification);
+        applyArm();
         return;
     }
     recordInput.addSectionHeading ("Mono");
@@ -405,6 +412,19 @@ void CueSettings::fillInputs()
     if (recordInput.indexOfItemId (id) < 0)
         id = 2000;
     recordInput.setSelectedId (id, juce::dontSendNotification);
+    applyArm();
+}
+
+void CueSettings::applyArm()
+{
+    // the device opens the chosen input only while armed: no input, no meter otherwise
+    const int id = recordInput.getSelectedId();
+    std::optional<OutputRoute> input;
+    if (armButton.getToggleState() && id >= 1000)
+        input = OutputRoute { id % 1000, id < 2000 };
+    controller.getEngine().setArmedInput (input);
+    inputLevel = 0.0f;
+    repaint (meterArea.expanded (2));
 }
 
 juce::File CueSettings::recordingFolder() const
@@ -424,6 +444,7 @@ void CueSettings::toggleRecording()
         const int id = recordingCue;
         recordingCue = -1;
         armButton.setToggleState (false, juce::dontSendNotification);   // disarmed after each take
+        applyArm();
         if (file.existsAsFile() && controller.getShow().isValid (id))
         {
             const auto oldName = controller.getShow().cue (id).name;
@@ -563,7 +584,7 @@ void CueSettings::timerCallback()
     auto& engine = controller.getEngine();
     const int id = recordInput.getSelectedId();
     float peak = 0.0f;
-    if (id >= 1000)
+    if (id >= 1000 && engine.getArmedInput().has_value())
     {
         const OutputRoute input { id % 1000, id < 2000 };
         for (int ch = 0; ch < input.numChannels(); ++ch)

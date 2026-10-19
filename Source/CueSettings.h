@@ -36,6 +36,7 @@ private:
 
     // recording into the button
     void fillInputs();
+    void applyArm();   // opens the chosen input on the device while ARM is lit, none otherwise
     void toggleRecording();
     void startRecording();
     juce::File recordingFolder() const;

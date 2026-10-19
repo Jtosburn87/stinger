@@ -66,10 +66,32 @@ PlaybackEngine::~PlaybackEngine()
 
 void PlaybackEngine::initialise (const juce::XmlElement* savedState)
 {
-    deviceManager.initialise (2, 2, savedState, true);
+    // no inputs at the start: they open only while recording is armed (enableAllChannels)
+    if (savedState != nullptr)
+        inputChoice = savedState->getStringAttribute ("stingerInputDevice");
+    deviceManager.initialise (0, 2, savedState, true);
     deviceManager.addChangeListener (this);
     enableAllChannels();
     deviceManager.addAudioCallback (this);
+}
+
+std::unique_ptr<juce::XmlElement> PlaybackEngine::createStateXml() const
+{
+    auto xml = deviceManager.createStateXml();
+    if (xml == nullptr)
+        xml = std::make_unique<juce::XmlElement> ("DEVICESETUP");
+    xml->setAttribute ("stingerInputDevice", inputChoice);
+    return xml;
+}
+
+juce::String PlaybackEngine::inputDeviceFor (juce::AudioIODeviceType& type, const juce::String& outputDeviceName) const
+{
+    if (! type.hasSeparateInputsAndOutputs())   // ASIO: inputs and outputs are one driver
+        return outputDeviceName;
+    const auto names = type.getDeviceNames (true);
+    if (names.contains (inputChoice))
+        return inputChoice;
+    return names[std::max (0, type.getDefaultDeviceIndex (true))];
 }
 
 void PlaybackEngine::shutdownAudio()
@@ -82,16 +104,34 @@ void PlaybackEngine::shutdownAudio()
 void PlaybackEngine::enableAllChannels()
 {
     auto* device = deviceManager.getCurrentAudioDevice();
-    if (device == nullptr)
+    auto* type = deviceManager.getCurrentDeviceTypeObject();
+    if (device == nullptr || type == nullptr)
         return;
+    auto setup = deviceManager.getAudioDeviceSetup();
+    if (type->hasSeparateInputsAndOutputs() && setup.inputDeviceName.isNotEmpty())
+        inputChoice = setup.inputDeviceName;   // picked in the Audio window (or what was open): use it when armed
+
     juce::BigInteger outs, ins;
     outs.setRange (0, std::min (maxOutputs, device->getOutputChannelNames().size()), true);
-    ins.setRange (0, std::min (maxInputs, device->getInputChannelNames().size()), true);
-    auto setup = deviceManager.getAudioDeviceSetup();
-    if (setup.outputChannels == outs && setup.inputChannels == ins && ! setup.useDefaultOutputChannels && ! setup.useDefaultInputChannels)
+    // Inputs only while recording is armed, and only the chosen one(s). Disarmed, no input device is open at
+    // all (Windows Audio would otherwise keep the input stream running even with no channels).
+    juce::String inputName;
+    if (armedInput.has_value())
+    {
+        inputName = inputDeviceFor (*type, setup.outputDeviceName);
+        const int count = std::min (maxInputs, getInputNames().size());
+        for (int ch = armedInput->firstChannel; ch < armedInput->firstChannel + armedInput->numChannels(); ++ch)
+            if (ch < count)
+                ins.setBit (ch);
+    }
+    if (ins.isZero())
+        inputName = {};
+    if (setup.outputChannels == outs && setup.inputChannels == ins && setup.inputDeviceName == inputName
+        && ! setup.useDefaultOutputChannels && ! setup.useDefaultInputChannels)
         return;
     setup.outputChannels = outs;
     setup.inputChannels = ins;
+    setup.inputDeviceName = inputName;
     setup.useDefaultOutputChannels = false;
     setup.useDefaultInputChannels = false;
     deviceManager.setAudioDeviceSetup (setup, true);
@@ -99,7 +139,19 @@ void PlaybackEngine::enableAllChannels()
 
 void PlaybackEngine::changeListenerCallback (juce::ChangeBroadcaster*)
 {
-    // A cue can go to any output and record from any input, so every channel of the device stays open.
+    // A cue can go to any output, so every output stays open; inputs follow the arm switch.
+    inputNamesCache.clear();   // devices may have come or gone
+    enableAllChannels();
+}
+
+void PlaybackEngine::setArmedInput (std::optional<OutputRoute> input)
+{
+    if (armedInput == input)
+        return;
+    armedInput = input;
+    if (! input.has_value())
+        for (auto& p : inputPeaks)
+            p.store (0.0f);
     enableAllChannels();
 }
 
@@ -126,8 +178,24 @@ juce::StringArray PlaybackEngine::getOutputNames() const
 
 juce::StringArray PlaybackEngine::getInputNames() const
 {
-    if (auto* device = deviceManager.getCurrentAudioDevice())
-        return device->getInputChannelNames();
+    // the inputs arming would open, also while they're closed
+    auto* device = deviceManager.getCurrentAudioDevice();
+    auto* type = deviceManager.getCurrentDeviceTypeObject();
+    if (device != nullptr && type != nullptr)
+    {
+        const auto setup = deviceManager.getAudioDeviceSetup();
+        const auto name = inputDeviceFor (*type, setup.outputDeviceName);
+        if (! type->hasSeparateInputsAndOutputs() || name == setup.inputDeviceName)
+            return device->getInputChannelNames();
+        if (name.isEmpty())
+            return {};
+        const auto key = type->getTypeName() + "|" + name;
+        if (auto it = inputNamesCache.find (key); it != inputNamesCache.end())
+            return it->second;
+        // an unopened device only for its channel names (JUCE does the same to compare sample rates)
+        std::unique_ptr<juce::AudioIODevice> temp (type->createDevice ({}, name));
+        return inputNamesCache[key] = temp != nullptr ? temp->getInputChannelNames() : juce::StringArray();
+    }
     juce::StringArray names;
     for (int i = 0; i < numInputs.load(); ++i)
         names.add ("Input " + juce::String (i + 1));

@@ -157,7 +157,7 @@ private:
         if (snapshotContent != nullptr)
             return;
         if (engine != nullptr)
-            if (auto xml = engine->getDeviceManager().createStateXml())
+            if (auto xml = engine->createStateXml())
                 properties.getUserSettings()->setValue ("audio", xml.get());
         properties.saveIfNeeded();
     }

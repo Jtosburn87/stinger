@@ -5,6 +5,8 @@
 #include "CueFx.h"
 #include <array>
 #include <atomic>
+#include <map>
+#include <optional>
 
 /** Everything the audio thread needs to play a cue, worked out on the message thread.
     Positions are samples of the cue's audio; the "timeline" is what plays (segments end to end). */
@@ -49,6 +51,8 @@ public:
 
     /** Opens the audio device (saved state from the settings file, or the default output). */
     void initialise (const juce::XmlElement* savedState);
+    /** The device manager's settings plus the input device to open when recording is armed. */
+    std::unique_ptr<juce::XmlElement> createStateXml() const;
     /** Stops the audio device (before the plugins and the show go away). */
     void shutdownAudio();
     juce::AudioDeviceManager& getDeviceManager() { return deviceManager; }
@@ -72,6 +76,10 @@ public:
     double getRecordedSeconds() const { return recordedSamples.load() / std::max (1.0, sampleRate.load()); }
     /** Peak level on a device input since the last call. */
     float takeInputPeak (int channel);
+    /** Recording armed: the device opens only this input (one channel or a pair); nullopt = no inputs open.
+        Changing it reopens the device, so the outputs drop out for a moment. */
+    void setArmedInput (std::optional<OutputRoute> input);
+    std::optional<OutputRoute> getArmedInput() const { return armedInput; }
 
     // ---- message thread ----
     void play (const PlayPlan& plan);
@@ -197,6 +205,10 @@ private:
     std::unique_ptr<juce::AudioFormatWriter::ThreadedWriter> threadedWriter;
     juce::SpinLock writerLock;
     OutputRoute recordInput;
+    std::optional<OutputRoute> armedInput;   // message thread
+    juce::String inputChoice;                // input device to open when armed (Windows Audio / Mac); "" = default
+    mutable std::map<juce::String, juce::StringArray> inputNamesCache;   // "type|device" -> its input names
+    juce::String inputDeviceFor (juce::AudioIODeviceType& type, const juce::String& outputDeviceName) const;
     std::atomic<bool> recording { false };
     std::atomic<juce::int64> recordedSamples { 0 };
     juce::File recordingFile;

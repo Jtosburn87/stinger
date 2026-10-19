@@ -1001,6 +1001,48 @@ static int testDownload (const juce::String& url)
     return failures == 0 ? 0 : 1;
 }
 
+/** EngineTests --arm: on each device type's default device, the inputs open only while recording is armed. */
+static int testArming()
+{
+    PlaybackEngine e;
+    e.initialise (nullptr);
+    auto& dm = e.getDeviceManager();
+    auto pump = [] (int ms) { juce::MessageManager::getInstance()->runDispatchLoopUntil (ms); };
+    for (auto* type : dm.getAvailableDeviceTypes())
+    {
+        dm.setCurrentAudioDeviceType (type->getTypeName(), true);
+        pump (300);
+        auto* d = dm.getCurrentAudioDevice();
+        if (d == nullptr)
+        {
+            std::printf ("%s: no device\n", type->getTypeName().toRawUTF8());
+            continue;
+        }
+        const int numIns = e.getInputNames().size();   // what arming can open (the device may have none open now)
+        std::printf ("%s: %s, %d inputs\n", type->getTypeName().toRawUTF8(), d->getName().toRawUTF8(), numIns);
+        auto show = [&] (const char* what, std::optional<OutputRoute> arm, int expected)
+        {
+            const auto t0 = juce::Time::getMillisecondCounterHiRes();
+            e.setArmedInput (arm);
+            const auto ms = juce::Time::getMillisecondCounterHiRes() - t0;
+            pump (200);
+            auto* dev = dm.getCurrentAudioDevice();
+            const auto active = dev != nullptr ? dev->getActiveInputChannels() : juce::BigInteger();
+            const auto outs = dev != nullptr ? dev->getActiveOutputChannels().countNumberOfSetBits() : 0;
+            const auto inputDevice = dm.getAudioDeviceSetup().inputDeviceName;
+            std::printf ("  %-22s inputs open: %-4s input device: %-30s (%d outs, %4.0f ms)\n", what, active.toString (2).toRawUTF8(),
+                         inputDevice.isEmpty() ? "none" : inputDevice.toRawUTF8(), outs, ms);
+            const int open = std::min (expected, numIns);
+            check (active.countNumberOfSetBits() == open && (open > 0) == inputDevice.isNotEmpty(), what);
+        };
+        show ("disarmed", std::nullopt, 0);
+        show ("armed In 1 (mono)", OutputRoute { 0, false }, 1);
+        show ("armed In 1-2 (stereo)", OutputRoute { 0, true }, 2);
+        show ("disarmed again", std::nullopt, 0);
+    }
+    return failures == 0 ? 0 : 1;
+}
+
 /** Opens every device of every type the way the Audio window does, timing each step (a hang shows as the
     last line printed). Plays nothing. */
 static int testDeviceSwitching (const juce::File& showFile)
@@ -1076,7 +1118,9 @@ int main (int argc, char** argv)
     }
     if (argc == 3 && juce::String (argv[1]) == "--download")
         return testDownload (juce::String (argv[2]));
-    if (argc >= 2 && juce::String (argv[1]) == "--devices")   // EngineTests --devices [show]: switch through every real device
+    if (argc == 2 && juce::String (argv[1]) == "--arm")
+        return testArming();
+    if (argc >= 2 && juce::String (argv[1]) == "--devices")  // EngineTests --devices [show]: switch through every real device
         return testDeviceSwitching (argc >= 3 ? juce::File (juce::String (argv[2])) : juce::File());
     testFadeCurves();
     testSegments();
