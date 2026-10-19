@@ -42,6 +42,7 @@ public:
 
     void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;   // empty button: choose a file
     void mouseDrag (const juce::MouseEvent&) override;   // edit mode (or Ctrl): drag a button into a playlist
 
     bool isInterestedInFileDrag (const juce::StringArray&) override { return true; }

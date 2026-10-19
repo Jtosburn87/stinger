@@ -179,7 +179,7 @@ void CueGrid::paintSlot (juce::Graphics& g, int slot)
     auto badges = inner.removeFromBottom (16.0f);
     g.setColour (empty ? Look::textFaint : onFill);
     g.setFont (Look::font (empty ? 13.0f : 15.0f, ! empty));
-    g.drawFittedText (empty ? juce::String::fromUTF8 ("Empty \xe2\x80\x94 drop a file") : cue.name,
+    g.drawFittedText (empty ? juce::String::fromUTF8 ("Empty \xe2\x80\x94 drop a file or double-click") : cue.name,
                       inner.toNearestInt(), juce::Justification::topLeft, 3, 0.9f);
 
     if (! empty)
@@ -228,11 +228,18 @@ void CueGrid::mouseDown (const juce::MouseEvent& e)
     if (e.mods.isPopupMenu())
         showMenu (id);
     else if (controller.getShow().cue (id).isEmpty())
-        chooseFile (id);
+        return;   // empty: just selected (double-click chooses a file)
     else if (editMode || e.mods.isCommandDown())
         return;   // edit mode / Ctrl: select and drag, no playing
     else
         controller.trigger (id);
+}
+
+void CueGrid::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    const int slot = slotAt (e.getPosition());
+    if (slot >= 0 && ! e.mods.isPopupMenu() && controller.getShow().cue (Show::cueId (bank, slot)).isEmpty())
+        chooseFile (Show::cueId (bank, slot));
 }
 
 void CueGrid::mouseDrag (const juce::MouseEvent& e)
