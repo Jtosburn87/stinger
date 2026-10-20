@@ -79,8 +79,9 @@ target_compile_definitions(StingerCore INTERFACE
 
 juce_add_gui_app(Stinger
     PRODUCT_NAME "Stinger"
-    COMPANY_NAME "Stinger"
-    BUNDLE_ID com.stinger.app
+    COMPANY_NAME "LEFTNoiseAudio"
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/installer/Stinger.png"
+    BUNDLE_ID com.leftnoiseaudio.stinger
     DOCUMENT_EXTENSIONS stinger
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT "Stinger records from your audio interface inputs into a button."

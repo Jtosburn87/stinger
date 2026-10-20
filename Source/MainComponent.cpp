@@ -172,7 +172,10 @@ void MainComponent::paint (juce::Graphics& g)
     g.strokePath (swell, juce::PathStrokeType (2.4f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     g.setColour (Look::text);
     g.setFont (Look::condensed (26.0f).withExtraKerningFactor (0.12f));
-    g.drawText ("STINGER", 60, 0, 140, topBarHeight, juce::Justification::centredLeft);
+    g.drawText ("STINGER", 60, 6, 140, 30, juce::Justification::centredLeft);
+    g.setColour (Look::textFaint);
+    g.setFont (Look::condensed (12.5f).withExtraKerningFactor (0.06f));
+    g.drawText ("by LEFTNoiseAudio", 61, 34, 140, 16, juce::Justification::centredLeft);
 
     // grid heading
     auto gridArea = getLocalBounds().withTrimmedTop (topBarHeight).withTrimmedBottom (editorHeight)

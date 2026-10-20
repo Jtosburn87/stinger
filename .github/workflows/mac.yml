@@ -1,5 +1,6 @@
 # Mac build on GitHub's Mac runners. Started by hand (Actions tab -> Mac build -> Run workflow) or by a
 # version tag (v0.3.0...), not on every push: Mac minutes count 10x against the private-repo allowance.
+# A tag build also attaches the DMG to that tag's GitHub release (made here if it doesn't exist yet).
 name: Mac build
 
 on:
@@ -11,6 +12,8 @@ jobs:
   mac:
     runs-on: macos-14
     timeout-minutes: 60
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -26,3 +29,12 @@ jobs:
           name: Stinger-mac
           path: dist/*.dmg
           retention-days: 30
+
+      - name: Attach DMG to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --prerelease --title "Stinger $TAG" --notes ""
+          gh release upload "$TAG" dist/*.dmg --clobber
