@@ -8,6 +8,10 @@
 #include <map>
 #include <optional>
 
+/** The show's playback mode: what a newly started button does to what's already playing
+    (it stops with a 50 ms fade). */
+enum class PlaybackMode { oneAtATime = 0, onePerOutput, overlap };
+
 /** Everything the audio thread needs to play a cue, worked out on the message thread.
     Positions are samples of the cue's audio; the "timeline" is what plays (segments end to end). */
 struct PlayPlan
@@ -28,7 +32,9 @@ struct PlayPlan
     OutputRoute output;
     bool loop = false;
     bool fadeOthers = false;
-    int tag = 0;                    // playlist entry this was started for (0 = none)
+    PlaybackMode takeOver = PlaybackMode::overlap;   // one at a time / per output: stops the others (overlap = none)
+    bool takeOverPlaylist = true;   // false: playlist songs are left alone (GO fades those itself)
+    int tag = 0;                   // playlist entry this was started for (0 = none)
     CueFx* fx = nullptr;            // the button's plugins (null = none): played through its own bus
     juce::int64 entryFade = 0;      // extra fade in from where it starts (the incoming side of a crossfade)
 

@@ -258,6 +258,74 @@ static void testStopping()
     check (e.getVoices().empty(), "and then everything has stopped");
 }
 
+static void testPlaybackModes()
+{
+    std::puts ("Playback modes");
+    PlaybackEngine e;
+    e.prepareForTest (rate, 6);
+    Outputs out (6);
+    auto dc = constant (1, 5.0, 1.0f);
+    auto start = [&] (Cue c, int id, PlaybackMode mode, int tag = 0, bool playlistToo = true)
+    {
+        PlayPlan plan;
+        PlayPlan::make (c, *dc, id, plan);
+        plan.takeOver = mode;
+        plan.tag = tag;
+        plan.takeOverPlaylist = playlistToo;
+        e.play (plan);
+    };
+    Cue pair12, pair34, mono1;
+    pair12.output = { 0, true };
+    pair34.output = { 2, true };
+    mono1.output = { 1, false };
+
+    start (pair12, 1, PlaybackMode::oneAtATime);
+    out.run (e, 2);
+    start (pair34, 2, PlaybackMode::oneAtATime);
+    out.run (e, 2);
+    bool firstStopping = false;
+    for (auto& v : e.getVoices())
+        firstStopping = firstStopping || (v.cueId == 1 && v.stopping);
+    check (firstStopping, "one at a time: the first starts stopping at once");
+    out.run (e, 5);   // 50 ms
+    check (! e.isCuePlaying (1) && e.isCuePlaying (2), "one at a time: it's gone after 50 ms, the new one plays");
+    e.stopAll (false);
+    out.run (e, 2);
+
+    start (pair12, 1, PlaybackMode::onePerOutput);
+    start (pair34, 2, PlaybackMode::onePerOutput);
+    out.run (e, 10);
+    check (e.isCuePlaying (1) && e.isCuePlaying (2), "one per output: different outputs both play");
+    start (mono1, 3, PlaybackMode::onePerOutput);
+    out.run (e, 10);
+    check (! e.isCuePlaying (1) && e.isCuePlaying (2) && e.isCuePlaying (3), "one per output: a mono send on 2 takes over the 1-2 pair only");
+    e.stopAll (false);
+    out.run (e, 2);
+
+    start (pair12, 1, PlaybackMode::overlap);
+    start (pair12, 2, PlaybackMode::overlap);
+    out.run (e, 10);
+    check (e.isCuePlaying (1) && e.isCuePlaying (2), "overlap: both play");
+    e.stopAll (false);
+    out.run (e, 2);
+
+    start (pair12, 1, PlaybackMode::oneAtATime, 7);              // a playlist song
+    start (pair34, 2, PlaybackMode::oneAtATime);                 // a button
+    out.run (e, 10);
+    check (! e.isCuePlaying (1) && e.isCuePlaying (2), "a button takes over from a playlist song");
+    start (pair12, 3, PlaybackMode::oneAtATime, 8, false);       // GO: leaves playlist songs to their own fade
+    start (pair12, 4, PlaybackMode::overlap, 9);                 // a playlist follow
+    out.run (e, 10);
+    check (! e.isCuePlaying (2) && e.isCuePlaying (3) && e.isCuePlaying (4), "GO takes over from buttons, playlist transitions overlap");
+
+    Show s;
+    check (s.playbackMode == PlaybackMode::oneAtATime, "new shows play one at a time");
+    s.playbackMode = PlaybackMode::onePerOutput;
+    Show back;
+    back.fromVar (juce::JSON::parse (juce::JSON::toString (s.toVar())));
+    check (back.playbackMode == PlaybackMode::onePerOutput, "the mode is saved in the show");
+}
+
 static void testFollow()
 {
     std::puts ("Playlist links in the engine");
@@ -1127,6 +1195,7 @@ int main (int argc, char** argv)
     testRouting();
     testEdits();
     testStopping();
+    testPlaybackModes();
     testFollow();
     testSeekAndLoop();
     testMovingButtons();

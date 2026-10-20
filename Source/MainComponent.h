@@ -64,6 +64,8 @@ private:
         void itemDropped (const SourceDetails&) override {}
     };
     juce::OwnedArray<BankTab> bankButtons;
+    juce::TextButton playbackModeButton;   // above the grid, right of the bank heading
+    static constexpr int playbackModeWidth = 190;
     juce::TextEditor bankNameEditor;   // over a tab while it's renamed
     int renamingBank = -1;
     void startRenamingBank (int bank);

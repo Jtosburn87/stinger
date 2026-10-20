@@ -606,6 +606,22 @@ PlaybackEngine::Voice* PlaybackEngine::startVoice (const PlayPlan& plan, int blo
             if (v.active)
                 beginStop (v, true);
 
+    if (plan.takeOver != PlaybackMode::overlap)
+    {
+        const auto takeOverFade = std::max<juce::int64> (1, (juce::int64) (sampleRate.load() * 0.05));
+        const int first = plan.output.firstChannel, last = first + plan.output.numChannels();
+        for (auto& v : voices)
+        {
+            if (! v.active || (! plan.takeOverPlaylist && v.plan.tag != 0))
+                continue;
+            const int vFirst = v.plan.output.firstChannel, vLast = vFirst + v.plan.output.numChannels();
+            if (plan.takeOver == PlaybackMode::onePerOutput && (vLast <= first || vFirst >= last))
+                continue;   // no channel in common
+            v.hasFollow = false;
+            stopOver (v, takeOverFade, FadeCurve::linear);
+        }
+    }
+
     Voice* target = nullptr;
     for (auto& v : voices)
         if (! v.active)

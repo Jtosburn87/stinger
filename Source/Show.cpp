@@ -25,6 +25,7 @@ void Show::reset()
     }
     playlists.clear();
     playlists.push_back ({ "Playlist 1", {} });
+    playbackMode = PlaybackMode::oneAtATime;
 }
 
 juce::var Show::toVar() const
@@ -32,6 +33,7 @@ juce::var Show::toVar() const
     auto* root = new juce::DynamicObject();
     root->setProperty ("format", "Stinger show");
     root->setProperty ("version", 1);
+    root->setProperty ("playbackMode", (int) playbackMode);
     juce::Array<juce::var> bankList;
     for (auto& b : banks)
     {
@@ -70,6 +72,7 @@ bool Show::fromVar (const juce::var& v)
 {
     if (v.getProperty ("format", {}).toString() != "Stinger show")
         return false;
+    playbackMode = (PlaybackMode) juce::jlimit (0, 2, (int) v.getProperty ("playbackMode", 0));
     banks.clear();
     if (auto* list = v.getProperty ("banks", {}).getArray())
         for (auto& bv : *list)
@@ -355,6 +358,7 @@ void ShowController::play (int id)
     PlayPlan plan;
     if (PlayPlan::make (show.cue (id), *audio, id, plan))
     {
+        plan.takeOver = show.playbackMode;
         attachFx (plan);
         engine.play (plan);
     }

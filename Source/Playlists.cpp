@@ -221,6 +221,8 @@ void ShowController::playEntry (int index, double fadeInSeconds)
     if (! makePlan (entry, tag, plan))
         return;
     plan.entryFade = (juce::int64) (std::max (0.0, fadeInSeconds) * sr);
+    plan.takeOver = show.playbackMode;   // takes over from buttons; playlist songs fade out as above
+    plan.takeOverPlaylist = false;
     tagUid[tag] = entry.uid;
     engine.play (plan);
     seen.insert (tag);

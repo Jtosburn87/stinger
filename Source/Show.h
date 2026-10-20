@@ -41,6 +41,7 @@ struct Show
 
     std::vector<Bank> banks;
     std::vector<Playlist> playlists;
+    PlaybackMode playbackMode = PlaybackMode::oneAtATime;
 
     Show() { reset(); }
     void reset();
@@ -141,6 +142,14 @@ public:
     void setTransition (int index, Transition t, double crossfadeSeconds);
     /** After changing a playlist directly (its name): marks the show changed. */
     void playlistEdited() { dirty = true; sendChangeMessage(); }
+    void setPlaybackMode (PlaybackMode mode)
+    {
+        if (mode == show.playbackMode)
+            return;
+        show.playbackMode = mode;
+        dirty = true;
+        sendChangeMessage();
+    }
     /** Renames a bank (the tab at the top; an empty name keeps the old one). */
     void renameBank (int bank, const juce::String& name)
     {

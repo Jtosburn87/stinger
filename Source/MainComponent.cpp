@@ -50,6 +50,22 @@ MainComponent::MainComponent (ShowController& c, juce::PropertiesFile& s)
                          { if (safe != nullptr && result > 0) safe->showImport (result == 2); });
     };
     addAndMakeVisible (importButton);
+
+    playbackModeButton.setWantsKeyboardFocus (false);
+    playbackModeButton.setTooltip ("What a button does to what's already playing (saved in the show)");
+    playbackModeButton.onClick = [this]
+    {
+        const auto mode = controller.getShow().playbackMode;
+        juce::PopupMenu m;
+        m.addSectionHeader ("When a button starts");
+        m.addItem (1, "One at a time: it stops whatever is playing", true, mode == PlaybackMode::oneAtATime);
+        m.addItem (2, "One per output: it stops what's on its outputs", true, mode == PlaybackMode::onePerOutput);
+        m.addItem (3, "Overlap: everything keeps playing", true, mode == PlaybackMode::overlap);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (playbackModeButton),
+                         [safe = juce::Component::SafePointer<MainComponent> (this)] (int result)
+                         { if (safe != nullptr && result > 0) safe->controller.setPlaybackMode ((PlaybackMode) (result - 1)); });
+    };
+    addAndMakeVisible (playbackModeButton);
     cueSettings.setDownloader (&downloader);
 
     surface.perform = [this] (const juce::String& action) { perform (action); };
@@ -130,6 +146,11 @@ void MainComponent::changeListenerCallback (juce::ChangeBroadcaster*)
     for (int b = 0; b < bankButtons.size(); ++b)
         bankButtons[b]->setButtonText (juce::String::charToString ((juce::juce_wchar) ('A' + b))
                                        + juce::String::fromUTF8 (" \xc2\xb7 ") + controller.getShow().banks[(size_t) b].name);
+    const auto mode = controller.getShow().playbackMode;
+    playbackModeButton.setButtonText (juce::String ("Playback: ") + (mode == PlaybackMode::oneAtATime   ? "one at a time"
+                                                                   : mode == PlaybackMode::onePerOutput ? "one per output"
+                                                                                                        : "overlap")
+                                      + juce::String::fromUTF8 (" \xe2\x96\xbe"));
     if (onTitleChanged)
         onTitleChanged();
 }
@@ -225,8 +246,9 @@ void MainComponent::paint (juce::Graphics& g)
     if (grid.isEditMode())
         g.setColour (Look::amber);
     g.drawText (grid.isEditMode() ? juce::String::fromUTF8 ("EDIT MODE \xe2\x80\x94 clicks select without playing \xc2\xb7 drag a button onto another to swap, or onto the playlist \xc2\xb7 keys still play")
-                                  : juce::String::fromUTF8 ("Click to play, again to fade out \xc2\xb7 drop files onto buttons \xc2\xb7 right-click for more \xc2\xb7 EDIT to move buttons \xc2\xb7 Space = GO \xc2\xb7 Esc stops all"),
-                heading.withTrimmedLeft ((int) Look::textWidth (Look::condensed (18.0f), bankTitle) + 16), juce::Justification::centredLeft);
+                                  : juce::String::fromUTF8 ("Click to play, again to fade out \xc2\xb7 right-click for more \xc2\xb7 Space = GO \xc2\xb7 Esc stops all"),
+                heading.withTrimmedLeft ((int) Look::textWidth (Look::condensed (18.0f), bankTitle) + 16).withTrimmedRight (playbackModeWidth + 8),
+                juce::Justification::centredLeft);
 }
 
 void MainComponent::resized()
@@ -260,6 +282,7 @@ void MainComponent::resized()
     cueSettings.setBounds (r.removeFromBottom (editorHeight));
     playlist.setBounds (r.removeFromLeft (playlistWidth));
     nowPlaying.setBounds (r.removeFromRight (nowPlayingWidth));
+    playbackModeButton.setBounds (r.reduced (16, 0).withTrimmedTop (12).removeFromTop (24).removeFromRight (playbackModeWidth));
     grid.setBounds (r.reduced (16, 0).withTrimmedTop (46).withTrimmedBottom (14));
 }
 
