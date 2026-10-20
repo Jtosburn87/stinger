@@ -7,7 +7,7 @@
       - top third near the start / end of what plays: fade in / fade out (drag the length)
       - middle third near the In / Out handle: trim
       - bottom third, anywhere: razor (drag across a section to cut it out, click a cut to bring it back)
-      - elsewhere: click = preview cursor (where Preview plays from), drag = select (Cut / Copy / Paste / Split;
+      - elsewhere: click = preview cursor (where the play button plays from), drag = select (Cut / Copy / Paste / Split;
         Split with nothing selected splits at the cursor).
     Zoom: H / V buttons, Alt + wheel (across), Ctrl + wheel (height); wheel scrolls; the bar underneath
     shows the whole file and the part in view. The audio file is never changed. */
@@ -88,7 +88,19 @@ private:
     void refreshFields();
     void setFromField (juce::Label& field);
 
-    void togglePreview();
+    /** Preview: plays to the output picked on the right, from the start of what plays or from the cursor. */
+    void playPreview (bool fromCursor);
+    void stopPreview();
+
+    /** A small transport button drawn as an icon: stop, play (from the cursor), play from the start. */
+    struct TransportButton : juce::Button
+    {
+        enum class Icon { stop, play, playFromStart };
+        TransportButton (Icon i) : juce::Button ({}), icon (i) {}
+        void paintButton (juce::Graphics& g, bool over, bool down) override;
+        Icon icon;
+        bool lit = false;   // a preview started by this button is playing
+    };
     void updateEditButtons();
     void addCut (juce::Range<double> range);
     void showHint (const juce::String& text);
@@ -112,8 +124,11 @@ private:
     std::unique_ptr<Canvas> canvas;
     std::unique_ptr<NavBar> nav;
     juce::TextButton hOut { "H-" }, hIn { "H+" }, vOut { "V-" }, vIn { "V+" }, fitButton { "Fit" },
-                     undoButton { "Undo" }, redoButton { "Redo" }, preview { "Preview" },
+                     undoButton { "Undo" }, redoButton { "Redo" },
                      cutButton { "Cut" }, copyButton { "Copy" }, pasteButton { "Paste" }, splitButton { "Split" };
+    TransportButton playFromStart { TransportButton::Icon::playFromStart }, playFromCursor { TransportButton::Icon::play },
+                    stopButton { TransportButton::Icon::stop };
+    bool previewFromCursor = false;   // which play button started the preview
     juce::ComboBox previewOut;
     juce::Label inLabel { {}, "In" }, outLabel { {}, "Out" }, inField, outField, hint;
 };

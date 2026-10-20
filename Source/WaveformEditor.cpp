@@ -770,7 +770,9 @@ WaveformEditor::WaveformEditor (ShowController& c) : controller (c)
     fitButton.onClick = [this] { fit(); verticalZoom = 1.0f; repaint(); };
     undoButton.onClick = [this] { undo(); };
     redoButton.onClick = [this] { redo(); };
-    preview.onClick = [this] { togglePreview(); };
+    playFromStart.onClick = [this] { playPreview (false); };
+    playFromCursor.onClick = [this] { playPreview (true); };
+    stopButton.onClick = [this] { stopPreview(); };
     cutButton.onClick = [this] { cutSelection (true); };
     copyButton.onClick = [this] { copySelection(); };
     pasteButton.onClick = [this] { paste(); };
@@ -792,8 +794,11 @@ WaveformEditor::WaveformEditor (ShowController& c) : controller (c)
     fitButton.setTooltip ("Whole file, normal height");
     undoButton.setTooltip ("Ctrl+Z");
     redoButton.setTooltip ("Ctrl+Y");
-    preview.setTooltip ("Play from the dashed cursor (or the start point) to the output on the right");
-    for (auto* b : { &hOut, &hIn, &vOut, &vIn, &fitButton, &undoButton, &redoButton, &preview })
+    playFromStart.setTooltip ("Preview from the beginning (the In point) to the output on the right");
+    playFromCursor.setTooltip ("Preview from the dashed cursor (click the waveform to place it) to the output on the right");
+    stopButton.setTooltip ("Stop the preview");
+    for (juce::Button* b : std::initializer_list<juce::Button*> { &hOut, &hIn, &vOut, &vIn, &fitButton, &undoButton, &redoButton,
+                                                                  &playFromStart, &playFromCursor, &stopButton })
     {
         b->setWantsKeyboardFocus (false);
         addAndMakeVisible (b);
@@ -1044,7 +1049,13 @@ void WaveformEditor::tick()
     if (viewLength <= 0.0 && fileSeconds() > 0.0)
         fit();   // the audio arrived
     const bool playing = controller.getEngine().isCuePlaying (cueId);
-    preview.setButtonText (playing ? juce::String::fromUTF8 ("Stop \xe2\x96\xa0") : juce::String::fromUTF8 ("Preview \xe2\x96\xb6"));
+    if (playFromStart.lit != (playing && ! previewFromCursor) || playFromCursor.lit != (playing && previewFromCursor))
+    {
+        playFromStart.lit = playing && ! previewFromCursor;
+        playFromCursor.lit = playing && previewFromCursor;
+        playFromStart.repaint();
+        playFromCursor.repaint();
+    }
     canvas->repaint();
 }
 
@@ -1188,14 +1199,36 @@ void WaveformEditor::fillPreviewOutputs()
     previewOut.setSelectedId (1, juce::dontSendNotification);
 }
 
-void WaveformEditor::togglePreview()
+void WaveformEditor::TransportButton::paintButton (juce::Graphics& g, bool over, bool down)
+{
+    getLookAndFeel().drawButtonBackground (g, *this, findColour (juce::TextButton::buttonColourId), over, down);
+    auto r = getLocalBounds().toFloat().withSizeKeepingCentre (12.0f, 12.0f);
+    g.setColour (! isEnabled() ? Look::textFaint : lit ? Look::green : Look::text);
+    juce::Path p;
+    if (icon == Icon::stop)
+    {
+        g.fillRect (r.reduced (1.0f));
+        return;
+    }
+    if (icon == Icon::playFromStart)
+    {
+        g.fillRect (r.removeFromLeft (2.0f));   // the line at the start
+        r.removeFromLeft (2.0f);
+    }
+    p.addTriangle (r.getX(), r.getY(), r.getX(), r.getBottom(), r.getRight(), r.getCentreY());
+    g.fillPath (p);
+}
+
+void WaveformEditor::stopPreview()
+{
+    controller.getEngine().stopCue (cueId, false);
+}
+
+void WaveformEditor::playPreview (bool fromCursor)
 {
     auto& engine = controller.getEngine();
     if (engine.isCuePlaying (cueId))
-    {
-        engine.stopCue (cueId, false);
-        return;
-    }
+        engine.stopCue (cueId, false);   // play again = start over
     auto* c = cue();
     auto a = audio();
     if (c == nullptr || a == nullptr)
@@ -1203,7 +1236,8 @@ void WaveformEditor::togglePreview()
     PlayPlan plan;
     if (! PlayPlan::make (*c, *a, cueId, plan))
         return;
-    if (cursor >= 0.0)
+    previewFromCursor = fromCursor;
+    if (fromCursor && cursor >= 0.0)
         plan.startAt = juce::jlimit<juce::int64> (0, plan.length - 1,
                                                   (juce::int64) std::llround (c->timelinePosition (a->seconds(), cursor) * a->sampleRate));
     const int id = previewOut.getSelectedId();
@@ -1236,8 +1270,12 @@ void WaveformEditor::resized()
         bar.removeFromLeft (3);
     }
     previewOut.setBounds (bar.removeFromRight (130));
-    bar.removeFromRight (4);
-    preview.setBounds (bar.removeFromRight (92));
+    bar.removeFromRight (6);
+    for (auto* b : { &stopButton, &playFromCursor, &playFromStart })
+    {
+        b->setBounds (bar.removeFromRight (32));
+        bar.removeFromRight (3);
+    }
 
     r.removeFromTop (6);
     auto footer = r.removeFromBottom (24);
