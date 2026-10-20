@@ -47,15 +47,27 @@ private:
     PlaylistPanel playlist;
     NowPlaying nowPlaying;
     CueSettings cueSettings;
-    /** A bank tab; a button dragged over it opens that bank (so buttons can move between banks). */
+    /** A bank tab; a button dragged over it opens that bank (so buttons can move between banks).
+        Right-click renames it. */
     struct BankTab : juce::TextButton, juce::DragAndDropTarget
     {
-        std::function<void()> onDragOver;
+        std::function<void()> onDragOver, onRightClick;
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            if (e.mods.isPopupMenu() && onRightClick)
+                onRightClick();
+            else
+                juce::TextButton::mouseDown (e);
+        }
         bool isInterestedInDragSource (const SourceDetails& d) override { return d.description.toString().startsWith ("cue:"); }
         void itemDragEnter (const SourceDetails&) override { if (onDragOver) onDragOver(); }
         void itemDropped (const SourceDetails&) override {}
     };
     juce::OwnedArray<BankTab> bankButtons;
+    juce::TextEditor bankNameEditor;   // over a tab while it's renamed
+    int renamingBank = -1;
+    void startRenamingBank (int bank);
+    void finishRenamingBank (bool keep);
     juce::TextButton fileButton { "File" }, audioButton { "Audio" }, editButton { "EDIT" },
                      globalButton { "GLOBAL KEYS" }, controlsButton { "Controls" }, importButton { "Import" };
     void showImport (bool links);

@@ -176,7 +176,7 @@ public:
             case Tool::trimIn:    return "Trim: drag the In point";
             case Tool::trimOut:   return "Trim: drag the Out point";
             case Tool::razor:     return "Razor: drag across a section to cut it out, click a cut to bring it back";
-            case Tool::pointer:   return juce::String::fromUTF8 ("Click: preview cursor here \xc2\xb7 drag: select (then Cut, Copy, Paste or Split)");
+            case Tool::pointer:   return juce::String::fromUTF8 ("Click: preview cursor here \xc2\xb7 drag: select (then Cut, Copy, Paste or Split) \xc2\xb7 Split with nothing selected splits here");
             case Tool::none:      break;
         }
         return {};
@@ -376,6 +376,11 @@ public:
             m.addItem (22, "Delete selection (Del)");
             m.addItem (23, "Split selection to a new button");
         }
+        else if (t > editor.playIn() && t < editor.playOut())
+        {
+            m.addSeparator();
+            m.addItem (25, "Split here (the rest to a new button)");
+        }
         m.addItem (24, "Paste here (Ctrl+V)", ! editor.clipboard().pieces.empty());
         m.addSeparator();
         m.addItem (4, "Remove all cuts", ! c->cuts.empty());
@@ -396,6 +401,7 @@ public:
                 case 21: ed.copySelection(); return;
                 case 22: ed.cutSelection (false); return;
                 case 23: ed.splitSelection(); return;
+                case 25: ed.cursor = t; ed.splitAtCursor(); return;
                 case 24: ed.selection = {}; ed.cursor = juce::jlimit (0.0, ed.fileSeconds(), t); ed.paste(); return;
                 default: break;
             }
@@ -768,11 +774,12 @@ WaveformEditor::WaveformEditor (ShowController& c) : controller (c)
     cutButton.onClick = [this] { cutSelection (true); };
     copyButton.onClick = [this] { copySelection(); };
     pasteButton.onClick = [this] { paste(); };
-    splitButton.onClick = [this] { splitSelection(); };
+    splitButton.onClick = [this] { if (hasSelection()) splitSelection(); else splitAtCursor(); };
     cutButton.setTooltip ("Take the selection out and keep a copy (Ctrl+X). Drag across the middle of the waveform to select.");
     copyButton.setTooltip ("Copy the selection (Ctrl+C)");
     pasteButton.setTooltip ("Play the copy again at the dashed cursor (Ctrl+V). Same song only.");
-    splitButton.setTooltip ("Make the selection a new button of its own (the next empty one)");
+    splitButton.setTooltip ("Make the selection a new button of its own (the next empty one). With nothing selected, split at the "
+                            "dashed cursor: this button ends there and the rest goes to a new button.");
     for (auto* b : { &cutButton, &copyButton, &pasteButton, &splitButton })
     {
         b->setWantsKeyboardFocus (false);
@@ -877,8 +884,9 @@ WaveformEditor::Clipboard& WaveformEditor::clipboard()
 void WaveformEditor::updateEditButtons()
 {
     const bool has = cue() != nullptr && audio() != nullptr;
-    for (auto* b : { &cutButton, &copyButton, &splitButton })
+    for (auto* b : { &cutButton, &copyButton })
         b->setEnabled (has && hasSelection());
+    splitButton.setEnabled (has && (hasSelection() || canSplitAtCursor()));
     pasteButton.setEnabled (has && ! clipboard().pieces.empty());
 }
 
@@ -995,6 +1003,39 @@ bool WaveformEditor::splitSelection()
     }
     showHint ("Split to button " + juce::String::charToString ((juce::juce_wchar) ('A' + Show::bankOf (id)))
               + juce::String (Show::slotOf (id) + 1) + ".");
+    return true;
+}
+
+bool WaveformEditor::canSplitAtCursor()
+{
+    return cue() != nullptr && audio() != nullptr && cursor > playIn() + 0.01 && cursor < playOut() - 0.01;
+}
+
+bool WaveformEditor::splitAtCursor()
+{
+    if (! canSplitAtCursor())
+        return false;
+    const double at = snapToZero (*audio(), cursor);
+    const auto fadeOut = cue()->fadeOut;
+    const int id = controller.splitToNewButton (cueId, { at, playOut() }, cue()->name + " (from " + CueGrid::formatTimeTenths (at) + ")");
+    if (id < 0)
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Split", "There's no empty button to put it on.");
+        return false;
+    }
+    // like a DAW split: the new button keeps the fade out, this one keeps the fade in and ends at the cursor
+    controller.getShow().cue (id).fadeOut = fadeOut;
+    controller.cueChanged (id);
+    auto* c = cue();
+    beginEdit();
+    c->trimOut = at;
+    c->fadeOut.seconds = 0.0;
+    c->fadeIn.seconds = std::min (c->fadeIn.seconds, at - c->trimIn);
+    edited();
+    endEdit();
+    updateEditButtons();
+    showHint ("Split at " + CueGrid::formatTimeTenths (at) + ": the rest is on button "
+              + juce::String::charToString ((juce::juce_wchar) ('A' + Show::bankOf (id))) + juce::String (Show::slotOf (id) + 1) + ".");
     return true;
 }
 

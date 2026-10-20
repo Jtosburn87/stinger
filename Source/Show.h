@@ -141,6 +141,16 @@ public:
     void setTransition (int index, Transition t, double crossfadeSeconds);
     /** After changing a playlist directly (its name): marks the show changed. */
     void playlistEdited() { dirty = true; sendChangeMessage(); }
+    /** Renames a bank (the tab at the top; an empty name keeps the old one). */
+    void renameBank (int bank, const juce::String& name)
+    {
+        const auto trimmed = name.trim();
+        if (bank < 0 || bank >= (int) show.banks.size() || trimmed.isEmpty() || trimmed == show.banks[(size_t) bank].name)
+            return;
+        show.banks[(size_t) bank].name = trimmed;
+        dirty = true;
+        sendChangeMessage();
+    }
 
     /** The entry GO plays (index in the current playlist, -1 = none). */
     int getNextEntry() const;

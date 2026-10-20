@@ -75,6 +75,14 @@ MainComponent::MainComponent (ShowController& c, juce::PropertiesFile& s)
     grid.onSelect = [this] (int id) { cueSettings.setCue (id); };
     cueSettings.setCue (grid.getSelected());
 
+    // bank rename: Enter or clicking away keeps it, Esc cancels
+    bankNameEditor.setInputRestrictions (30);
+    bankNameEditor.setJustification (juce::Justification::centred);
+    bankNameEditor.onReturnKey = [this] { finishRenamingBank (true); };
+    bankNameEditor.onEscapeKey = [this] { finishRenamingBank (false); };
+    bankNameEditor.onFocusLost = [this] { finishRenamingBank (true); };
+    addChildComponent (bankNameEditor);
+
     controller.addChangeListener (this);
     controller.getEngine().getDeviceManager().addChangeListener (this);
     rebuildBanks();
@@ -144,11 +152,36 @@ void MainComponent::rebuildBanks()
         button->setClickingTogglesState (true);
         button->setToggleState (b == grid.getBank(), juce::dontSendNotification);
         button->onClick = [this, b] { grid.setBank (b); };
-        button->setTooltip ("Ctrl+" + juce::String (b + 1));
+        button->onRightClick = [this, b] { startRenamingBank (b); };
+        button->setTooltip ("Ctrl+" + juce::String (b + 1) + " (right-click to rename)");
         button->setWantsKeyboardFocus (false);
         addAndMakeVisible (button);
     }
     resized();
+}
+
+void MainComponent::startRenamingBank (int bank)
+{
+    if (bank < 0 || bank >= bankButtons.size())
+        return;
+    finishRenamingBank (true);
+    renamingBank = bank;
+    bankNameEditor.setText (controller.getShow().banks[(size_t) bank].name, juce::dontSendNotification);
+    bankNameEditor.setBounds (bankButtons[bank]->getBounds());
+    bankNameEditor.setVisible (true);
+    bankNameEditor.toFront (true);
+    bankNameEditor.grabKeyboardFocus();
+    bankNameEditor.selectAll();
+}
+
+void MainComponent::finishRenamingBank (bool keep)
+{
+    if (renamingBank < 0)
+        return;
+    const int bank = std::exchange (renamingBank, -1);
+    bankNameEditor.setVisible (false);
+    if (keep)
+        controller.renameBank (bank, bankNameEditor.getText());   // the tab text follows via the change message
 }
 
 void MainComponent::paint (juce::Graphics& g)

@@ -7,7 +7,8 @@
       - top third near the start / end of what plays: fade in / fade out (drag the length)
       - middle third near the In / Out handle: trim
       - bottom third, anywhere: razor (drag across a section to cut it out, click a cut to bring it back)
-      - elsewhere: click = preview cursor (where Preview plays from), drag = select (Cut / Copy / Paste / Split).
+      - elsewhere: click = preview cursor (where Preview plays from), drag = select (Cut / Copy / Paste / Split;
+        Split with nothing selected splits at the cursor).
     Zoom: H / V buttons, Alt + wheel (across), Ctrl + wheel (height); wheel scrolls; the bar underneath
     shows the whole file and the part in view. The audio file is never changed. */
 class WaveformEditor : public juce::Component
@@ -32,6 +33,10 @@ public:
     bool paste();
     /** The selection becomes a new button of its own (the next empty one). */
     bool splitSelection();
+    /** Splits the song at the cursor like a DAW: this button ends there, the rest becomes a new button
+        (the next empty one). Split does this when nothing is selected. */
+    bool splitAtCursor();
+    bool canSplitAtCursor();
 
     /** Lists the device outputs for Preview (call when the audio device changes). */
     void fillPreviewOutputs();
