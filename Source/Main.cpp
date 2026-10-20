@@ -60,6 +60,8 @@ public:
             show = juce::File (settings.getValue ("lastShow"));
         if (show.existsAsFile())
             content->openShow (show);
+
+        showDownloadWarningOnce (settings);
     }
 
     void shutdown() override
@@ -103,6 +105,24 @@ public:
     }
 
 private:
+    /** First start only: a reminder about the download feature (Pull WAV / Import links). */
+    void showDownloadWarningOnce (juce::PropertiesFile& settings)
+    {
+        if (settings.getBoolValue ("downloadWarningShown"))
+            return;
+        auto options = juce::MessageBoxOptions()
+                           .withIconType (juce::MessageBoxIconType::WarningIcon)
+                           .withTitle ("Stinger")
+                           .withMessage ("The download feature is only for content you have the right to use!")
+                           .withButton ("OK")
+                           .withAssociatedComponent (window.get());
+        juce::AlertWindow::showAsync (options, [&settings] (int)
+        {
+            settings.setValue ("downloadWarningShown", true);
+            settings.saveIfNeeded();
+        });
+    }
+
     /** Developer option: Stinger.exe --snapshot show.stinger out.png draws the main window with that show
         into an image and quits, without opening an audio device or showing a window. */
     void writeSnapshot (const juce::File& showFile, const juce::File& image)
