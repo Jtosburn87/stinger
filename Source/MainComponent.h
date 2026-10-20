@@ -22,6 +22,7 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     bool keyPressed (const juce::KeyPress& key) override;
+    void mouseDown (const juce::MouseEvent& e) override;
 
     void openShow (const juce::File& f);
     /** Asks to save unsaved changes, then calls next(true) to go ahead or next(false) if cancelled. */

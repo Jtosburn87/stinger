@@ -58,7 +58,7 @@ public:
 private:
     void handleIncomingMidiMessage (juce::MidiInput*, const juce::MidiMessage&) override;
     void handleMidi (const juce::MidiMessage& m);
-    void assign (const juce::String& target, const juce::KeyPress* key, const MidiTrigger* midi);
+    void assign (juce::String target, const juce::KeyPress* key, const MidiTrigger* midi);
     void updateGlobalKeys();
     void refreshInputs();
     void sendFeedback();

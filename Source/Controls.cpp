@@ -165,7 +165,8 @@ void CommandMap::fromVar (const juce::var& v)
             Binding b;
             b.key = p.value.getProperty ("key", {}).toString();
             b.midi = MidiTrigger::fromVar (p.value.getProperty ("midi", {}));
-            bindings[p.name.toString()] = b;
+            if (bindings.count (p.name.toString()) > 0)   // known commands only
+                bindings[p.name.toString()] = b;
         }
 }
 

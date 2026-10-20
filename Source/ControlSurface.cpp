@@ -165,8 +165,9 @@ void ControlSurface::cancelLearn()
     sendChangeMessage();
 }
 
-void ControlSurface::assign (const juce::String& target, const juce::KeyPress* key, const MidiTrigger* midi)
+void ControlSurface::assign (juce::String target, const juce::KeyPress* key, const MidiTrigger* midi)
 {
+    // target is a copy: it's usually learnTarget itself, cleared next
     learnTarget.clear();
     if (target.startsWith ("cue:"))
     {

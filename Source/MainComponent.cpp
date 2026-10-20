@@ -105,6 +105,7 @@ MainComponent::MainComponent (ShowController& c, juce::PropertiesFile& s)
     changeListenerCallback (nullptr);
 
     setWantsKeyboardFocus (true);
+    addMouseListener (this, true);   // see mouseDown
     setSize (1440, 960);
 }
 
@@ -284,6 +285,16 @@ void MainComponent::resized()
     nowPlaying.setBounds (r.removeFromRight (nowPlayingWidth));
     playbackModeButton.setBounds (r.reduced (16, 0).withTrimmedTop (12).removeFromTop (24).removeFromRight (playbackModeWidth));
     grid.setBounds (r.reduced (16, 0).withTrimmedTop (46).withTrimmedBottom (14));
+}
+
+// A click on anything that doesn't take typing (buttons, the grid, the waveform) gives the keys back to the
+// window. Otherwise JUCE passes the focus on to the first box that wants it - the button's Name field -
+// and hotkeys or a key being learnt would be typed into it.
+void MainComponent::mouseDown (const juce::MouseEvent& e)
+{
+    if (e.eventComponent == nullptr || e.eventComponent->getWantsKeyboardFocus())
+        return;
+    grabKeyboardFocus();
 }
 
 bool MainComponent::keyPressed (const juce::KeyPress& key)
