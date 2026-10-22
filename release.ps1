@@ -16,6 +16,12 @@ New-Item -ItemType Directory -Force $stage | Out-Null
 # (Built by hand: Compress-Archive in Windows PowerShell writes backslashes into the paths.)
 Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
 $plugin = Get-Item "streamdeck\com.stinger.streamdeck.sdPlugin"
+# the plugin's version follows Stinger's, so Stream Deck sees each release as an update
+$manifest = Join-Path $plugin.FullName "manifest.json"
+$numeric = (Select-String -Path CMakeLists.txt -Pattern 'project\(Stinger VERSION ([0-9.]+)').Matches[0].Groups[1].Value + ".0"
+$json = [System.IO.File]::ReadAllText($manifest)
+$updated = [regex]::Replace($json, '"Version": "[0-9.]+"', '"Version": "' + $numeric + '"')
+if ($updated -ne $json) { [System.IO.File]::WriteAllText($manifest, $updated, (New-Object System.Text.UTF8Encoding $false)) }
 $target = Join-Path $PSScriptRoot "$stage\Stinger.streamDeckPlugin"
 Remove-Item $target -ErrorAction SilentlyContinue
 $archive = [System.IO.Compression.ZipFile]::Open($target, [System.IO.Compression.ZipArchiveMode]::Create)

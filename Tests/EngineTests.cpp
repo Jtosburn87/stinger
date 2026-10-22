@@ -265,13 +265,13 @@ static void testPlaybackModes()
     e.prepareForTest (rate, 6);
     Outputs out (6);
     auto dc = constant (1, 5.0, 1.0f);
-    auto start = [&] (Cue c, int id, PlaybackMode mode, int tag = 0, bool playlistToo = true)
+    auto start = [&] (Cue c, int id, PlaybackMode mode, int tag = 0, int playlist = 0)
     {
         PlayPlan plan;
         PlayPlan::make (c, *dc, id, plan);
         plan.takeOver = mode;
         plan.tag = tag;
-        plan.takeOverPlaylist = playlistToo;
+        plan.playlist = playlist;
         e.play (plan);
     };
     Cue pair12, pair34, mono1;
@@ -309,14 +309,28 @@ static void testPlaybackModes()
     e.stopAll (false);
     out.run (e, 2);
 
-    start (pair12, 1, PlaybackMode::oneAtATime, 7);              // a playlist song
+    start (pair12, 1, PlaybackMode::oneAtATime, 7, 1);           // a playlist song
     start (pair34, 2, PlaybackMode::oneAtATime);                 // a button
     out.run (e, 10);
     check (! e.isCuePlaying (1) && e.isCuePlaying (2), "a button takes over from a playlist song");
-    start (pair12, 3, PlaybackMode::oneAtATime, 8, false);       // GO: leaves playlist songs to their own fade
-    start (pair12, 4, PlaybackMode::overlap, 9);                 // a playlist follow
+    start (pair12, 3, PlaybackMode::oneAtATime, 8, 1);           // GO: leaves its own playlist's songs to their own fade
+    start (pair12, 4, PlaybackMode::overlap, 9, 1);              // a playlist follow
     out.run (e, 10);
     check (! e.isCuePlaying (2) && e.isCuePlaying (3) && e.isCuePlaying (4), "GO takes over from buttons, playlist transitions overlap");
+    start (pair12, 5, PlaybackMode::oneAtATime, 10, 1);          // GO again in the same playlist
+    out.run (e, 10);
+    check (e.isCuePlaying (3) && e.isCuePlaying (4) && e.isCuePlaying (5), "GO leaves its own playlist's songs alone");
+    start (pair34, 6, PlaybackMode::oneAtATime, 11, 2);          // GO in another playlist
+    out.run (e, 10);
+    check (! e.isCuePlaying (3) && ! e.isCuePlaying (5) && e.isCuePlaying (6), "one at a time: another playlist's GO takes over");
+    e.stopAll (false);
+    out.run (e, 2);
+    start (pair12, 7, PlaybackMode::onePerOutput, 12, 1);
+    start (pair34, 8, PlaybackMode::onePerOutput, 13, 2);
+    out.run (e, 10);
+    check (e.isCuePlaying (7) && e.isCuePlaying (8), "one per output: two playlists on different outputs both play");
+    e.stopAll (false);
+    out.run (e, 2);
 
     Show s;
     check (s.playbackMode == PlaybackMode::oneAtATime, "new shows play one at a time");
@@ -460,6 +474,99 @@ static void testSeekAndLoop()
     out.run (e, 2);
 }
 
+static void testSelfDestruct()
+{
+    std::puts ("Self Destruct");
+    PlaybackEngine e;
+    e.prepareForTest (rate, 2);
+    Outputs out (2);
+    ShowController sc (e);
+    auto& show = sc.getShow();
+    for (int i = 0; i < 3; ++i)
+    {
+        show.cue (i) = monoOut (0);
+        sc.setAudioForTest (i, constant (1, 0.3, 0.2f));
+    }
+    auto tick = [&] (int blocks) { for (int b = 0; b < blocks; ++b) { out.run (e); sc.updateSelfDestruct(); } };
+
+    sc.play (0);
+    tick (40);
+    check (! show.cue (0).spent, "mode off: a button keeps its colour after playing");
+
+    sc.setSelfDestruct (true);
+    sc.play (0);
+    tick (5);
+    check (! show.cue (0).spent, "still its colour while it plays");
+    tick (40);
+    check (show.cue (0).spent, "black once it has played to the end");
+    sc.play (1);
+    tick (5);
+    e.stopCue (1, false);
+    tick (5);
+    check (show.cue (1).spent && ! show.cue (2).spent, "black when stopped by hand too; others untouched");
+
+    PlayPlan plan;   // a preview from the waveform editor doesn't count
+    PlayPlan::make (show.cue (2), *sc.getAudio (2), 2, plan);
+    plan.preview = true;
+    e.play (plan);
+    tick (40);
+    check (! show.cue (2).spent, "a preview in the waveform editor doesn't count");
+
+    auto loaded = Cue::fromVar (juce::JSON::parse (juce::JSON::toString (show.cue (0).toVar())));
+    Show copy;
+    copy.fromVar (juce::JSON::parse (juce::JSON::toString (show.toVar())));
+    check (loaded.spent && copy.selfDestruct, "black buttons and the mode are saved in the show");
+
+    sc.resetColour (0);
+    check (! show.cue (0).spent && show.cue (1).spent, "Reset colour: just that button");
+    sc.resetColours();
+    check (! sc.anySpent(), "Reset: every button gets its colour back");
+    sc.setSelfDestruct (false);
+    sc.play (0);
+    tick (40);
+    check (! show.cue (0).spent, "mode off again: colours stay");
+}
+
+static void testShowFolders()
+{
+    std::puts ("Show folders");
+    PlaybackEngine e;
+    e.prepareForTest (rate, 2);
+    ShowController sc (e);
+    auto& show = sc.getShow();
+    const auto temp = juce::File::getSpecialLocation (juce::File::tempDirectory);
+    const auto home = temp.getChildFile ("Stinger folders test");
+    home.deleteRecursively();
+    sc.setHomeFolderForTest (home);
+    const auto source = temp.getChildFile ("Stinger folders source").getChildFile ("Walk up.wav");
+    source.getParentDirectory().createDirectory();
+    source.replaceWithText ("not really audio");
+
+    sc.assignFile (0, source);
+    const auto unsaved = home.getChildFile ("Unsaved/Audio/Walk up.wav");
+    check (show.cue (0).file == unsaved && unsaved.existsAsFile() && source.existsAsFile() && show.cue (0).name == "Walk up",
+           "unsaved show: a file put on a button is copied into Unsaved\\Audio");
+    sc.assignFile (1, source);
+    check (show.cue (1).file == unsaved && ! home.getChildFile ("Unsaved/Audio/Walk up (2).wav").exists(),
+           "the same file on another button: no second copy");
+
+    juce::String error;
+    const auto showFile = sc.showFileFor ("My Show");
+    check (showFile == home.getChildFile ("My Show/My Show.stinger"), "a show is saved as Stinger\\<name>\\<name>.stinger");
+    check (sc.saveShow (showFile, error) && showFile.existsAsFile(), "saving makes the show's folder");
+    const auto moved = home.getChildFile ("My Show/Audio/Walk up.wav");
+    check (show.cue (0).file == moved && show.cue (1).file == moved && moved.existsAsFile() && ! unsaved.exists(),
+           "first save: the show's audio moves into its own Audio folder");
+    check (sc.getAudioFolder() == home.getChildFile ("My Show/Audio"), "recordings and downloads go to the show's Audio folder");
+
+    check (sc.saveShow (sc.showFileFor ("Copy"), error) && show.cue (0).file == moved, "Save as: the copy uses the first show's audio");
+    check (sc.getAudioFolder() == home.getChildFile ("Copy/Audio"), "and new audio goes to the copy's own folder");
+    check (sc.showFileFor ("a/b:c") .getParentDirectory().getParentDirectory() == home, "a name with odd characters still makes one folder");
+    sc.newShow();
+    home.deleteRecursively();
+    source.getParentDirectory().deleteRecursively();
+}
+
 static void testMovingButtons()
 {
     std::puts ("Moving buttons, several files at once");
@@ -468,13 +575,14 @@ static void testMovingButtons()
     ShowController sc (e);
     auto& show = sc.getShow();
     auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory);
+    sc.setHomeFolderForTest (dir.getChildFile ("Stinger moving test"));
 
     show.cue (0) = monoOut (0);
     show.cue (0).name = "Intro";
     show.cue (0).hotkey = "F5";
     show.cue (5) = monoOut (1);
     show.cue (5).name = "Outro";
-    sc.addToPlaylist (0);
+    sc.addToPlaylist (0, 0);
     sc.swapCues (0, 5);
     check (show.cue (5).name == "Intro" && show.cue (5).hotkey == "F5" && show.cue (0).name == "Outro", "swap: the buttons change places, keys go with the song");
     check (sc.currentPlaylist()->entries[0].cueId == 5, "the playlist follows the song to its new place");
@@ -507,6 +615,17 @@ static void testMovingButtons()
            "split: the section on the next empty button, with the cut inside it");
     check (show.cue (31).hotkey.isEmpty() && show.cue (31).file == show.cue (30).file && sc.getAudio (31) == sc.getAudio (30),
            "same song (shared audio), no key");
+
+    // undo of a recording: the button gets its old song back, its other settings stay
+    const auto before = show.cue (30);
+    show.cue (30).file = dir.getChildFile ("Take 1.wav");
+    show.cue (30).name = "Take";
+    show.cue (30).trimIn = 0.0;
+    sc.restoreCue (30, before);
+    check (show.cue (30).file == before.file && show.cue (30).name == "Anthem" && show.cue (30).trimIn == before.trimIn
+           && show.cue (30).cuts.size() == 2 && show.cue (30).hotkey == "F9", "restore a button: its old song and edits come back");
+    sc.restoreCue (30, Cue());
+    check (show.cue (30).isEmpty() && sc.getAudio (30) == nullptr, "restore to an empty button");
 }
 
 static void testPlaylists()
@@ -523,96 +642,148 @@ static void testPlaylists()
         show.cue (i) = monoOut (0);
         show.cue (i).name = "Song " + juce::String (i + 1);
         sc.setAudioForTest (i, constant (1, 0.5, levels[i]));
-        sc.addToPlaylist (i);
+        sc.addToPlaylist (0, i);
     }
-    sc.setTransition (0, Transition::playNext, 0.0);
-    sc.setTransition (1, Transition::crossfade, 0.1);
-    // 2 -> 3: stop
+    {
+        const auto& en = show.playlists[0].entries;
+        check (en[0].transition == Transition::playNext && en[2].transition == Transition::playNext
+               && en[3].transition == Transition::stop, "new songs play next, the last one stops");
+        sc.addToPlaylist (0, 0, 1);
+        check (show.playlists[0].entries[1].transition == Transition::playNext && show.playlists[0].entries.back().transition == Transition::stop,
+               "a song put in the middle plays next too");
+        sc.removeEntry (0, 1);
+    }
+    sc.setTransition (0, 0, Transition::playNext, 0.0);
+    sc.setTransition (0, 1, Transition::crossfade, 0.1);
+    sc.setTransition (0, 2, Transition::stop, 0.0);   // 3 -> 4: stop
 
     auto tick = [&] (int blocks) { for (int b = 0; b < blocks; ++b) { out.run (e); sc.updatePlaylist(); } };
-    check (sc.getNextEntry() == 0 && sc.getOnAirEntry() == -1, "next is the top before anything plays");
-    sc.go();
+    check (sc.getNextEntry (0) == 0 && sc.getOnAirEntry (0) == -1, "next is the top before anything plays");
+    sc.go (0);
     tick (1);
-    check (sc.getOnAirEntry() == 0 && sc.getNextEntry() == 1 && near (out.at (0), 0.1f), "GO plays song 1, song 2 is next");
+    check (sc.getOnAirEntry (0) == 0 && sc.getNextEntry (0) == 1 && near (out.at (0), 0.1f), "GO plays song 1, song 2 is next");
     tick (50);   // 0.5 s: song 1 ended, song 2 followed
-    check (sc.getOnAirEntry() == 1 && sc.getNextEntry() == 2 && near (out.at (0), 0.2f), "Play next: song 2 followed by itself");
+    check (sc.getOnAirEntry (0) == 1 && sc.getNextEntry (0) == 2 && near (out.at (0), 0.2f), "Play next: song 2 followed by itself");
     tick (40);   // 0.9 s: in the crossfade into song 3 (starts at 0.9 s)
     tick (5);
     check (e.getVoices().size() == 2, "crossfade: songs 2 and 3 together");
     tick (10);
-    check (sc.getOnAirEntry() == 2 && sc.getNextEntry() == 3 && near (out.at (0), 0.3f, 0.01f), "song 3 on air after the crossfade");
+    check (sc.getOnAirEntry (0) == 2 && sc.getNextEntry (0) == 3 && near (out.at (0), 0.3f, 0.01f), "song 3 on air after the crossfade");
     tick (60);
-    check (e.getVoices().empty() && sc.getNextEntry() == 3, "Stop: the playlist stops after song 3, song 4 waits for GO");
-    sc.go();
+    check (e.getVoices().empty() && sc.getNextEntry (0) == 3, "Stop: the playlist stops after song 3, song 4 waits for GO");
+    sc.go (0);
     tick (5);
-    check (sc.getOnAirEntry() == 3 && near (out.at (0), 0.4f), "GO plays song 4");
+    check (sc.getOnAirEntry (0) == 3 && near (out.at (0), 0.4f), "GO plays song 4");
     tick (60);
 
     // change a link while the song plays
-    sc.setNextEntry (0);
-    sc.go();
+    sc.setNextEntry (0, 0);
+    sc.go (0);
     tick (5);
-    sc.setTransition (0, Transition::stop, 0.0);
+    sc.setTransition (0, 0, Transition::stop, 0.0);
     tick (60);
     check (e.getVoices().empty(), "changing Play next to Stop while playing takes effect");
 
     // GO while a playlist song plays: it fades out, the next one starts
-    sc.setNextEntry (1);
-    sc.go();
+    sc.setNextEntry (0, 1);
+    sc.go (0);
     tick (5);
-    sc.go();
+    sc.go (0);
     tick (1);
-    check (sc.getOnAirEntry() == 2 && e.getVoices().size() == 2 && e.getVoices().back().stopping, "GO moves on: the old song fades out");
+    check (sc.getOnAirEntry (0) == 2 && e.getVoices().size() == 2 && e.getVoices().back().stopping, "GO moves on: the old song fades out");
     e.stopAll (false);
     tick (3);
 
     // Loop until GO: loops; GO lets it finish the pass, then the next song follows with no gap
-    sc.setTransition (0, Transition::loopUntil, 0.2);
-    sc.setTransition (1, Transition::stop, 0.0);
-    sc.setNextEntry (0);
-    sc.go();
+    sc.setTransition (0, 0, Transition::loopUntil, 0.2);
+    sc.setTransition (0, 1, Transition::stop, 0.0);
+    sc.setNextEntry (0, 0);
+    sc.go (0);
     tick (130);   // 1.3 s: well past the 0.5 s song
-    check (sc.getOnAirEntry() == 0 && sc.isLoopingUntilGo() && near (out.at (0), 0.1f), "Loop until GO keeps looping");
-    sc.go();      // 1.3 s into the song: the pass ends at 1.5 s
+    check (sc.getOnAirEntry (0) == 0 && sc.isLoopingUntilGo (0) && near (out.at (0), 0.1f), "Loop until GO keeps looping");
+    sc.go (0);      // 1.3 s into the song: the pass ends at 1.5 s
     tick (15);
-    check (sc.getOnAirEntry() == 0 && ! sc.isLoopingUntilGo() && near (out.at (0), 0.1f), "GO: the loop finishes its pass first");
+    check (sc.getOnAirEntry (0) == 0 && ! sc.isLoopingUntilGo (0) && near (out.at (0), 0.1f), "GO: the loop finishes its pass first");
     tick (10);
-    check (sc.getOnAirEntry() == 1 && e.getVoices().size() == 1 && near (out.at (0), 0.2f), "then the next song, no gap");
+    check (sc.getOnAirEntry (0) == 1 && e.getVoices().size() == 1 && near (out.at (0), 0.2f), "then the next song, no gap");
     e.stopAll (false);
     tick (3);
 
     // Fade to next: crossfade now, over the looping song's fade time
-    sc.setNextEntry (0);
-    sc.go();
+    sc.setNextEntry (0, 0);
+    sc.go (0);
     tick (70);
-    sc.fadeToNext();
+    sc.fadeToNext (0);
     tick (10);   // 0.1 s into a 0.2 s fade
     check (e.getVoices().size() == 2 && near (out.at (0), 0.5f * 0.1f + 0.5f * 0.2f, 0.01f), "Fade to next: half way, both at half");
     tick (12);
-    check (sc.getOnAirEntry() == 1 && e.getVoices().size() == 1 && near (out.at (0), 0.2f, 0.005f), "Fade to next: the next song on its own");
+    check (sc.getOnAirEntry (0) == 1 && e.getVoices().size() == 1 && near (out.at (0), 0.2f, 0.005f), "Fade to next: the next song on its own");
     e.stopAll (false);
     tick (3);
 
     // changing Loop until GO to something else while it loops lets it end
-    sc.setNextEntry (0);
-    sc.go();
+    sc.setNextEntry (0, 0);
+    sc.go (0);
     tick (70);
-    sc.setTransition (0, Transition::stop, 0.0);
+    sc.setTransition (0, 0, Transition::stop, 0.0);
     tick (40);
     check (e.getVoices().empty(), "a loop changed to Stop plays to its end and stops");
-    sc.setTransition (0, Transition::playNext, 0.0);
-    sc.setTransition (1, Transition::crossfade, 0.1);
+    sc.setTransition (0, 0, Transition::playNext, 0.0);
+    sc.setTransition (0, 1, Transition::crossfade, 0.1);
 
     // reorder, remove, save and load
-    sc.moveEntry (3, 0);
+    sc.moveEntry (0, 3, 0);
     check (show.playlists[0].entries[0].cueId == 3, "move an entry");
-    sc.removeEntry (0);
+    sc.removeEntry (0, 0);
     check (show.playlists[0].entries.size() == 3, "remove an entry");
     Show t;
     t.fromVar (juce::JSON::parse (juce::JSON::toString (show.toVar())));
     check (t.playlists.size() == 1 && t.playlists[0].entries.size() == 3
            && t.playlists[0].entries[1].transition == Transition::crossfade
            && near ((float) t.playlists[0].entries[1].crossfadeSeconds, 0.1f), "playlists and transitions saved in the show");
+
+    // two playlists: each has its own Next / On air and GO
+    e.stopAll (false);
+    tick (3);
+    show.playbackMode = PlaybackMode::overlap;
+    const int b = sc.addPlaylist ("Second");
+    check (b == 1 && sc.getSelectedPlaylist() == 1, "a new playlist is selected");
+    sc.addToPlaylist (b, 1);
+    sc.addToPlaylist (b, 2);
+    sc.setNextEntry (0, 0);
+    sc.go (0);
+    tick (2);
+    sc.go (b);
+    tick (2);
+    check (sc.getOnAirEntry (0) == 0 && sc.getNextEntry (0) == 1 && sc.getOnAirEntry (b) == 0 && sc.getNextEntry (b) == 1,
+           "GO in each playlist moves only its own Next");
+    check (e.getVoices().size() == 2, "overlap: both playlists play");
+    sc.go (b);
+    tick (2);
+    int fading = 0;
+    for (auto& v : e.getVoices())
+        fading += v.stopping ? 1 : 0;
+    check (sc.getOnAirEntry (b) == 1 && sc.getOnAirEntry (0) == 0 && fading == 1, "GO again fades only that playlist's song");
+    e.stopAll (false);
+    tick (150);
+    check (sc.getOnAirEntry (0) == -1 && sc.getOnAirEntry (b) == -1, "nothing on air once everything stops");
+
+    show.playbackMode = PlaybackMode::oneAtATime;
+    sc.setNextEntry (0, 0);
+    sc.go (0);
+    tick (2);
+    sc.setNextEntry (b, 0);
+    sc.go (b);
+    tick (10);
+    check (e.getVoices().size() == 1 && sc.getOnAirEntry (b) == 0 && sc.getOnAirEntry (0) == -1,
+           "one at a time: another playlist's GO takes over");
+    e.stopAll (false);
+    tick (3);
+
+    sc.selectPlaylist (0);
+    sc.removePlaylist (0);
+    check (show.playlists.size() == 1 && show.playlists[0].name == "Second" && sc.getSelectedPlaylist() == 0
+           && sc.getNextEntry (0) >= 0, "delete a playlist: the others keep their songs and state");
 }
 
 static void testControls()
@@ -835,6 +1006,21 @@ static void testPlugins()
            && loaded.plugins[1].description.contains ("Test"), "plugin and its settings are saved in the show");
     sc.removePlugin (0, 1);
     check (sc.getFx (0) == nullptr && show.cue (0).plugins[1].isEmpty(), "remove empties the slot");
+
+    // put in / taken out while the button plays: heard straight away
+    show.cue (2) = monoOut (0);
+    sc.setAudioForTest (2, constant (1, 2.0, 0.25f));
+    sc.play (2);
+    out.run (e, 5);
+    check (near (out.at (0), 0.25f), "playing with no plugins");
+    sc.setPluginForTest (2, 0, std::make_unique<Doubler>());
+    out.run (e);
+    check (near (out.at (0), 0.5f), "a plugin put in while it plays is heard at once");
+    sc.removePlugin (2, 0);
+    out.run (e);
+    check (near (out.at (0), 0.25f), "and taken out at once");
+    e.stopAll (false);
+    out.run (e, 30);
 }
 
 static void testRecording()
@@ -1199,6 +1385,8 @@ int main (int argc, char** argv)
     testFollow();
     testSeekAndLoop();
     testMovingButtons();
+    testShowFolders();
+    testSelfDestruct();
     testPlaylists();
     testControls();
     testStreamDeck();

@@ -149,6 +149,8 @@ juce::var Cue::toVar() const
     o->setProperty ("colour", colour);
     if (customColour != 0)
         o->setProperty ("customColour", juce::String::toHexString ((juce::int64) customColour));
+    if (spent)
+        o->setProperty ("spent", true);
     o->setProperty ("trimIn", trimIn);
     o->setProperty ("trimOut", trimOut);
     juce::Array<juce::var> cutList;
@@ -208,6 +210,7 @@ Cue Cue::fromVar (const juce::var& v)
         c.file = juce::File (path);
     c.colour = (int) v.getProperty ("colour", 0);
     c.customColour = (juce::uint32) v.getProperty ("customColour", {}).toString().getHexValue64();
+    c.spent = (bool) v.getProperty ("spent", false);
     c.trimIn = std::max (0.0, (double) v.getProperty ("trimIn", 0.0));
     c.trimOut = (double) v.getProperty ("trimOut", -1.0);
     if (auto* list = v.getProperty ("cuts", {}).getArray())

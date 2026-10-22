@@ -59,6 +59,8 @@ Action-Icon "fadenext" { param($g, $s) $pen = New-Object System.Drawing.Pen $lig
 Action-Icon "stopall"  { param($g, $s) $g.FillRectangle((New-Object System.Drawing.SolidBrush $light), $s * 0.22, $s * 0.22, $s * 0.56, $s * 0.56) }
 Action-Icon "fadeall"  { param($g, $s) $pen = New-Object System.Drawing.Pen $light, ($s / 10); $g.DrawLine($pen, $s * 0.1, $s * 0.2, $s * 0.9, $s * 0.8) }
 Action-Icon "bank"     { param($g, $s) Glyph-Text $g $s "A" 0.7 }
+Action-Icon "selfdestruct" { param($g, $s) $g.FillEllipse((New-Object System.Drawing.SolidBrush $light), $s * 0.18, $s * 0.3, $s * 0.6, $s * 0.6); $pen = New-Object System.Drawing.Pen $light, ($s / 14); $g.DrawLine($pen, $s * 0.62, $s * 0.36, $s * 0.82, $s * 0.14) }
+Action-Icon "resetcolours" { param($g, $s) $pen = New-Object System.Drawing.Pen $light, ($s / 12); $g.DrawArc($pen, $s * 0.16, $s * 0.16, $s * 0.68, $s * 0.68, 60, 290); $g.DrawLine($pen, $s * 0.72, $s * 0.12, $s * 0.76, $s * 0.32); $g.DrawLine($pen, $s * 0.76, $s * 0.32, $s * 0.56, $s * 0.34) }
 Action-Icon "countdown" { param($g, $s) $pen = New-Object System.Drawing.Pen $light, ($s / 12); $g.DrawEllipse($pen, $s * 0.12, $s * 0.12, $s * 0.76, $s * 0.76); $g.DrawLine($pen, $s * 0.5, $s * 0.5, $s * 0.5, $s * 0.24); $g.DrawLine($pen, $s * 0.5, $s * 0.5, $s * 0.7, $s * 0.6) }
 
 # default key images (72 / 144), shown until the plugin draws the key
@@ -79,4 +81,6 @@ Key-Image "stopall"  ([System.Drawing.Color]::FromArgb(201, 58, 63))  "STOP`nALL
 Key-Image "fadeall"  ([System.Drawing.Color]::FromArgb(38, 43, 50))   "FADE`nALL"
 Key-Image "bank"     ([System.Drawing.Color]::FromArgb(30, 34, 40))   "BANK"
 Key-Image "countdown" ([System.Drawing.Color]::FromArgb(42, 36, 24))   "-0:00"
+Key-Image "selfdestruct" ([System.Drawing.Color]::FromArgb(138, 28, 31)) "SELF`nDESTRUCT"
+Key-Image "resetcolours" ([System.Drawing.Color]::FromArgb(38, 43, 50))  "RESET`nCOLOURS"
 Write-Host "Icons written to $out"

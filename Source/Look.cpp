@@ -33,6 +33,11 @@ namespace Look
 
     juce::Colour colourOf (const Cue& cue)
     {
+        return cue.spent ? juce::Colours::black : baseColourOf (cue);
+    }
+
+    juce::Colour baseColourOf (const Cue& cue)
+    {
         return cue.customColour != 0 ? juce::Colour (cue.customColour).withAlpha (1.0f) : cueColour (cue.colour);
     }
 
@@ -55,7 +60,7 @@ namespace Look
             ColourPicker (ShowController& c, int id)
                 : juce::ColourSelector (juce::ColourSelector::showColourspace | juce::ColourSelector::showSliders), controller (c), cueId (id)
             {
-                setCurrentColour (colourOf (controller.getShow().cue (cueId)));
+                setCurrentColour (baseColourOf (controller.getShow().cue (cueId)));
                 setColour (juce::ColourSelector::backgroundColourId, panel);
                 addChangeListener (this);
                 setSize (300, 320);

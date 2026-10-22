@@ -23,6 +23,10 @@ public:
     void resized() override;
     bool keyPressed (const juce::KeyPress& key) override;
     void mouseDown (const juce::MouseEvent& e) override;
+    /** The credits window (File > Credits). */
+    void showCredits();
+    /** For dev snapshots: the credits page as an image. */
+    static juce::Image creditsImage();
 
     void openShow (const juce::File& f);
     /** Asks to save unsaved changes, then calls next(true) to go ahead or next(false) if cancelled. */
@@ -67,6 +71,8 @@ private:
     juce::OwnedArray<BankTab> bankButtons;
     juce::TextButton playbackModeButton;   // above the grid, right of the bank heading
     static constexpr int playbackModeWidth = 190;
+    juce::TextButton selfDestructButton { "SELF DESTRUCT" }, resetColoursButton { "Reset" };   // left of the playback button
+    static constexpr int selfDestructWidth = 190;
     juce::TextEditor bankNameEditor;   // over a tab while it's renamed
     int renamingBank = -1;
     void startRenamingBank (int bank);

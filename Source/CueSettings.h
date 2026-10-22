@@ -64,7 +64,7 @@ public:
     void setSettings (juce::PropertiesFile* s) { settings = s; fillInputs(); }
     /** Where Pull WAV downloads (set by the main window). */
     void setDownloader (Downloader* d) { downloader = d; }
-    /** Where downloads go: "<show> Downloads" next to the show, else Documents\Stinger Downloads. */
+    /** Where downloads go: the show's Audio folder. */
     static juce::File downloadFolder (const ShowController&);
 
 private:

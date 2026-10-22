@@ -34,6 +34,7 @@ bool ShowController::setPlugin (int id, int slot, const juce::PluginDescription&
         return false;
     pluginsGoing (fxFor (id), slot);
     fxFor (id).setSlot (slot, std::move (plugin), description);
+    engine.setCueFx (id, getFx (id));   // already playing: through the plugin from now on
     auto& data = show.cue (id).plugins[(size_t) slot];
     if (auto xml = description.createXml())
         data.description = xml->toString (juce::XmlElement::TextFormat().singleLine().withoutHeader());
@@ -49,6 +50,7 @@ void ShowController::setPluginForTest (int id, int slot, std::unique_ptr<juce::A
     juce::PluginDescription d;
     d.name = p != nullptr ? p->getName() : juce::String();
     fxFor (id).setSlot (slot, std::move (p), d);
+    engine.setCueFx (id, getFx (id));
 }
 
 void ShowController::removePlugin (int id, int slot)
@@ -59,6 +61,7 @@ void ShowController::removePlugin (int id, int slot)
     {
         pluginsGoing (*it->second, slot);
         it->second->setSlot (slot, nullptr, {});
+        engine.setCueFx (id, getFx (id));
     }
     show.cue (id).plugins[(size_t) slot] = {};
     dirty = true;

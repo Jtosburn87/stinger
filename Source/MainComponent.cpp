@@ -6,6 +6,97 @@ namespace
 {
     constexpr int topBarHeight = 60, playlistWidth = 280, nowPlayingWidth = 300, editorHeight = 360;
     const char* showWildcard = "*.stinger";
+
+    /** File > Credits. */
+    class Credits : public juce::Component
+    {
+    public:
+        Credits()
+        {
+            email.setFont (Look::font (14.0f), false, juce::Justification::centredLeft);
+            email.setColour (juce::HyperlinkButton::textColourId, Look::amber);
+            email.setWantsKeyboardFocus (false);
+            addAndMakeVisible (email);
+
+            message.append ("My name is Justin Osburn. Stinger is a free piece of software I created for myself. It is free now and "
+                            "will always be free. If you ever see someone trying to sell it email me directly. You are welcome to use "
+                            "Stinger all you want and share it with all your friends. If you are enjoying Stinger, think it's made "
+                            "your job easier or just want to say thanks, my PayPal is",
+                            Look::font (14.0f), Look::text);
+            message.setLineSpacing (3.0f);
+            builtWith.append (juce::String::fromUTF8 ("Built with JUCE \xc2\xb7 VST3 and ASIO by Steinberg \xc2\xb7 downloads by yt-dlp, "
+                                                      "FFmpeg and Deno. VST and ASIO are trademarks of Steinberg Media Technologies GmbH."),
+                              Look::font (12.0f), Look::textDim);
+            builtWith.setLineSpacing (2.0f);
+            setSize (520, 0);
+            layout();
+        }
+
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (Look::panel);
+            g.setColour (Look::text);
+            g.setFont (Look::condensed (34.0f).withExtraKerningFactor (0.12f));
+            g.drawText ("STINGER", 28, 22, getWidth() - 56, 38, juce::Justification::centredLeft);
+            g.setColour (Look::amber);
+            g.setFont (Look::condensed (15.0f).withExtraKerningFactor (0.06f));
+            g.drawText (juce::String ("by LEFTNoiseAudio  ") + juce::String::fromUTF8 ("\xc2\xb7  version ") + JUCE_APPLICATION_VERSION_STRING,
+                        29, 60, getWidth() - 56, 20, juce::Justification::centredLeft);
+
+            juce::TextLayout text;
+            text.createLayout (message, (float) textWidth());
+            text.draw (g, messageArea.toFloat());
+            g.setColour (Look::text);
+            g.setFont (Look::font (14.0f));
+            g.drawText ("Enjoy!", enjoyArea, juce::Justification::topLeft);
+            g.drawText ("-Justin", enjoyArea.translated (0, 22), juce::Justification::topLeft);
+
+            g.setColour (Look::line);
+            g.fillRect (28, builtArea.getY() - 14, getWidth() - 56, 1);
+            juce::TextLayout built;
+            built.createLayout (builtWith, (float) textWidth());
+            built.draw (g, builtArea.toFloat());
+        }
+
+    private:
+        int textWidth() const { return getWidth() - 56; }
+
+        void layout()
+        {
+            juce::TextLayout text;
+            text.createLayout (message, (float) textWidth());
+            messageArea = { 28, 100, textWidth(), (int) std::ceil (text.getHeight()) };
+            email.setBounds (24, messageArea.getBottom() + 2, 220, 22);
+            enjoyArea = { 28, email.getBottom() + 18, textWidth(), 44 };
+            juce::TextLayout built;
+            built.createLayout (builtWith, (float) textWidth());
+            builtArea = { 28, enjoyArea.getBottom() + 28, textWidth(), (int) std::ceil (built.getHeight()) };
+            setSize (getWidth(), builtArea.getBottom() + 24);
+        }
+
+        juce::AttributedString message, builtWith;
+        juce::HyperlinkButton email { "Justinosburn@live.com", juce::URL ("mailto:Justinosburn@live.com") };
+        juce::Rectangle<int> messageArea, enjoyArea, builtArea;
+    };
+}
+
+juce::Image MainComponent::creditsImage()
+{
+    Credits c;
+    return c.createComponentSnapshot (c.getLocalBounds());
+}
+
+void MainComponent::showCredits()
+{
+    juce::DialogWindow::LaunchOptions o;
+    o.content.setOwned (new Credits());
+    o.dialogTitle = "Credits";
+    o.dialogBackgroundColour = Look::panel;
+    o.escapeKeyTriggersCloseButton = true;
+    o.useNativeTitleBar = true;
+    o.resizable = false;
+    o.componentToCentreAround = this;
+    o.launchAsync();
 }
 
 MainComponent::MainComponent (ShowController& c, juce::PropertiesFile& s)
@@ -13,7 +104,8 @@ MainComponent::MainComponent (ShowController& c, juce::PropertiesFile& s)
 {
     addAndMakeVisible (grid);
     addAndMakeVisible (playlist);
-    playlist.getRows().getBank = [this] { return grid.getBank(); };
+    playlist.getBank = [this] { return grid.getBank(); };
+    playlist.onKey = [this] (const juce::KeyPress& key) { return keyPressed (key); };
     addAndMakeVisible (nowPlaying);
     addAndMakeVisible (cueSettings);
 
@@ -66,6 +158,18 @@ MainComponent::MainComponent (ShowController& c, juce::PropertiesFile& s)
                          { if (safe != nullptr && result > 0) safe->controller.setPlaybackMode ((PlaybackMode) (result - 1)); });
     };
     addAndMakeVisible (playbackModeButton);
+
+    selfDestructButton.setClickingTogglesState (true);
+    selfDestructButton.setWantsKeyboardFocus (false);
+    selfDestructButton.setTooltip ("Self Destruct: each button goes black once it has played (saved in the show). Reset brings the colours back.");
+    selfDestructButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff8a1c1f));
+    selfDestructButton.onClick = [this] { controller.setSelfDestruct (selfDestructButton.getToggleState()); };
+    addAndMakeVisible (selfDestructButton);
+    resetColoursButton.setWantsKeyboardFocus (false);
+    resetColoursButton.setTooltip ("Give every black button its colour back");
+    resetColoursButton.onClick = [this] { controller.resetColours(); };
+    resetColoursButton.setEnabled (false);
+    addAndMakeVisible (resetColoursButton);
     cueSettings.setDownloader (&downloader);
 
     surface.perform = [this] (const juce::String& action) { perform (action); };
@@ -147,6 +251,8 @@ void MainComponent::changeListenerCallback (juce::ChangeBroadcaster*)
     for (int b = 0; b < bankButtons.size(); ++b)
         bankButtons[b]->setButtonText (juce::String::charToString ((juce::juce_wchar) ('A' + b))
                                        + juce::String::fromUTF8 (" \xc2\xb7 ") + controller.getShow().banks[(size_t) b].name);
+    selfDestructButton.setToggleState (controller.isSelfDestruct(), juce::dontSendNotification);
+    resetColoursButton.setEnabled (controller.anySpent());
     const auto mode = controller.getShow().playbackMode;
     playbackModeButton.setButtonText (juce::String ("Playback: ") + (mode == PlaybackMode::oneAtATime   ? "one at a time"
                                                                    : mode == PlaybackMode::onePerOutput ? "one per output"
@@ -246,9 +352,10 @@ void MainComponent::paint (juce::Graphics& g)
     g.setFont (Look::font (12.0f));
     if (grid.isEditMode())
         g.setColour (Look::amber);
-    g.drawText (grid.isEditMode() ? juce::String::fromUTF8 ("EDIT MODE \xe2\x80\x94 clicks select without playing \xc2\xb7 drag a button onto another to swap, or onto the playlist \xc2\xb7 keys still play")
+    g.drawText (grid.isEditMode() ? juce::String::fromUTF8 ("EDIT MODE \xe2\x80\x94 clicks select without playing \xc2\xb7 drag a button onto another to swap, or onto a playlist \xc2\xb7 keys still play")
                                   : juce::String::fromUTF8 ("Click to play, again to fade out \xc2\xb7 right-click for more \xc2\xb7 Space = GO \xc2\xb7 Esc stops all"),
-                heading.withTrimmedLeft ((int) Look::textWidth (Look::condensed (18.0f), bankTitle) + 16).withTrimmedRight (playbackModeWidth + 8),
+                heading.withTrimmedLeft ((int) Look::textWidth (Look::condensed (18.0f), bankTitle) + 16)
+                       .withTrimmedRight (playbackModeWidth + selfDestructWidth + 16),
                 juce::Justification::centredLeft);
 }
 
@@ -283,7 +390,13 @@ void MainComponent::resized()
     cueSettings.setBounds (r.removeFromBottom (editorHeight));
     playlist.setBounds (r.removeFromLeft (playlistWidth));
     nowPlaying.setBounds (r.removeFromRight (nowPlayingWidth));
-    playbackModeButton.setBounds (r.reduced (16, 0).withTrimmedTop (12).removeFromTop (24).removeFromRight (playbackModeWidth));
+    auto headingRow = r.reduced (16, 0).withTrimmedTop (12).removeFromTop (24);
+    playbackModeButton.setBounds (headingRow.removeFromRight (playbackModeWidth));
+    headingRow.removeFromRight (8);
+    auto destruct = headingRow.removeFromRight (selfDestructWidth);
+    resetColoursButton.setBounds (destruct.removeFromRight (64));
+    destruct.removeFromRight (4);
+    selfDestructButton.setBounds (destruct);
     grid.setBounds (r.reduced (16, 0).withTrimmedTop (46).withTrimmedBottom (14));
 }
 
@@ -296,7 +409,6 @@ void MainComponent::mouseDown (const juce::MouseEvent& e)
         return;
     grabKeyboardFocus();
 }
-
 bool MainComponent::keyPressed (const juce::KeyPress& key)
 {
     if (surface.learning().isEmpty())
@@ -352,21 +464,31 @@ void MainComponent::perform (const juce::String& action)
         showBank (action.substring (4).getIntValue() - 1);
         return;
     }
-    if (action == "go")              controller.go();
-    else if (action == "fadeNext")   controller.fadeToNext();
+    if (action.startsWith ("go") && action.length() > 2 && action.substring (2).containsOnly ("0123456789"))
+    {
+        const int pl = action.substring (2).getIntValue() - 1;   // GO playlist N
+        if (pl >= 0 && pl < (int) show.playlists.size())
+            controller.go (pl);
+        return;
+    }
+    if (action == "go")              controller.go (controller.getSelectedPlaylist());
+    else if (action == "fadeNext")   controller.fadeToNext (controller.getSelectedPlaylist());
     else if (action == "stopAll")    controller.getEngine().stopAll (false);
     else if (action == "fadeAll")    controller.getEngine().stopAll (true);
     else if (action == "bankNext")   showBank ((grid.getBank() + 1) % (int) show.banks.size());
     else if (action == "bankPrev")   showBank ((grid.getBank() + (int) show.banks.size() - 1) % (int) show.banks.size());
     else if (action == "edit")       setEditMode (! grid.isEditMode());
     else if (action == "globalKeys") surface.setGlobal (! surface.isGlobal());
+    else if (action == "selfDestruct") controller.setSelfDestruct (! controller.isSelfDestruct());
+    else if (action == "resetColours") controller.resetColours();
     else if (action == "nextDown" || action == "nextUp")
     {
         auto* p = controller.currentPlaylist();
         if (p == nullptr || p->entries.empty())
             return;
-        const int n = std::max (0, controller.getNextEntry());
-        controller.setNextEntry (juce::jlimit (0, (int) p->entries.size() - 1, n + (action == "nextDown" ? 1 : -1)));
+        const int pl = controller.getSelectedPlaylist();
+        const int n = std::max (0, controller.getNextEntry (pl));
+        controller.setNextEntry (pl, juce::jlimit (0, (int) p->entries.size() - 1, n + (action == "nextDown" ? 1 : -1)));
     }
 }
 
@@ -385,6 +507,8 @@ void MainComponent::showFileMenu()
     m.addItem (2, "Open show...");
     m.addItem (3, "Save show", controller.getShowFile() != juce::File());
     m.addItem (4, "Save show as...");
+    m.addSeparator();
+    m.addItem (5, "Credits");
     juce::Component::SafePointer<MainComponent> safe (this);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (fileButton), [safe] (int result)
     {
@@ -397,7 +521,9 @@ void MainComponent::showFileMenu()
             {
                 if (safe == nullptr || ! go)
                     return;
-                safe->chooser = std::make_unique<juce::FileChooser> ("Open show", safe->controller.getShowFile(), showWildcard);
+                const auto start = safe->controller.getShowFile() != juce::File() ? safe->controller.getShowFile()
+                                                                                  : safe->controller.getHomeFolder();
+                safe->chooser = std::make_unique<juce::FileChooser> ("Open show", start, showWildcard);
                 safe->chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                                             [safe] (const juce::FileChooser& fc)
                 {
@@ -409,6 +535,8 @@ void MainComponent::showFileMenu()
             safe->saveShow (false);
         else if (result == 4)
             safe->saveShow (true);
+        else if (result == 5)
+            safe->showCredits();
     });
 }
 
@@ -447,24 +575,43 @@ void MainComponent::saveShow (bool askForFile, std::function<void (bool)> done)
         write (controller.getShowFile());
         return;
     }
-    const auto start = controller.getShowFile() != juce::File()
-                         ? controller.getShowFile()
-                         : juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Show.stinger");
-    chooser = std::make_unique<juce::FileChooser> ("Save show", start, showWildcard);
+    // just a name: the show goes in Documents\Stinger\<name>\<name>.stinger (its audio in Audio next to it)
+    const auto current = controller.getShowFile();
+    auto* w = new juce::AlertWindow ("Save show", "Show name\n(saved in " + controller.getHomeFolder().getFullPathName() + ")",
+                                     juce::MessageBoxIconType::NoIcon);
+    w->addTextEditor ("name", current != juce::File() ? current.getFileNameWithoutExtension() : juce::String ("Show"));
+    w->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    w->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
     juce::Component::SafePointer<MainComponent> safe (this);
-    chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::warnAboutOverwriting,
-                          [safe, write, done] (const juce::FileChooser& fc)
+    w->enterModalState (true, juce::ModalCallbackFunction::create ([safe, w, write, done, current] (int result)
     {
         if (safe == nullptr)
             return;
-        auto f = fc.getResult();
-        if (f == juce::File())
+        const auto name = w->getTextEditorContents ("name").trim();
+        if (result != 1 || name.isEmpty())
         {
             if (done) done (false);
             return;
         }
-        write (f.withFileExtension ("stinger"));
-    });
+        const auto f = safe->controller.showFileFor (name);
+        if (! f.existsAsFile() || f == current)
+        {
+            write (f);
+            return;
+        }
+        juce::AlertWindow::showOkCancelBox (juce::MessageBoxIconType::QuestionIcon, "Save show",
+                                            "There's already a show called \"" + f.getFileNameWithoutExtension() + "\". Replace it?",
+                                            "Replace", "Cancel", nullptr,
+                                            juce::ModalCallbackFunction::create ([safe, write, done, f] (int ok)
+        {
+            if (safe == nullptr)
+                return;
+            if (ok == 1)
+                write (f);
+            else if (done)
+                done (false);
+        }));
+    }), true);
 }
 
 void MainComponent::askToSave (std::function<void (bool)> next)

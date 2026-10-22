@@ -28,8 +28,10 @@ namespace Look
     juce::String cueColourName (int index);
     /** The palette in the order menus show it (by hue). */
     const std::vector<int>& paletteOrder();
-    /** A button's colour: its own picked colour, else its palette colour. */
+    /** A button's colour as shown: black once Self Destruct has spent it, else its own colour. */
     juce::Colour colourOf (const Cue& cue);
+    /** A button's own colour: its picked colour, else its palette colour. */
+    juce::Colour baseColourOf (const Cue& cue);
     /** A dark shade of a button colour for backgrounds (text stays readable on it). */
     juce::Colour shade (juce::Colour c, float amount = 0.32f);
     /** Black or white, whichever reads better on c. */

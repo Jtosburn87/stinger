@@ -1133,9 +1133,46 @@ bool WaveformEditor::undo()
     const auto step = undoSteps.back();
     undoSteps.pop_back();
     redoSteps.push_back (step);
-    if (controller.getShow().isValid (step.cueId) && controller.getShow().cue (step.cueId).file == step.file)
+    if (step.recording)
+        restoreSong (step.cueId, step.cueAfter.file, step.cueBefore);
+    else if (controller.getShow().isValid (step.cueId) && controller.getShow().cue (step.cueId).file == step.file)
         restoreEdits (step.cueId, step.before);   // (not if the button has another song now: moved or replaced)
     return true;
+}
+
+void WaveformEditor::recordedOver (int id, const Cue& before)
+{
+    if (! controller.getShow().isValid (id))
+        return;
+    Step step { id, controller.getShow().cue (id).file, {}, {} };
+    step.recording = true;
+    step.cueBefore = before;
+    step.cueAfter = controller.getShow().cue (id);
+    undoSteps.push_back (step);
+    if (undoSteps.size() > 200)
+        undoSteps.erase (undoSteps.begin());
+    redoSteps.clear();
+}
+
+void WaveformEditor::restoreSong (int id, const juce::File& expected, const Cue& song)
+{
+    // only if the button still has the song the step left on it (not moved, replaced or cleared since)
+    auto& show = controller.getShow();
+    if (! show.isValid (id) || show.cue (id).file != expected)
+        return;
+    // the song (file, name, edits) goes back; the button's other settings stay as they are now
+    Cue c = show.cue (id);
+    c.file = song.file;
+    c.name = song.name;
+    Edits::of (song).applyTo (c);
+    controller.restoreCue (id, c);
+    selection = {};
+    cursor = -1.0;
+    if (id == cueId)
+        fit();   // the other song: the view fits it again once its audio has loaded (tick)
+    updateEditButtons();
+    refreshFields();
+    repaint();
 }
 
 bool WaveformEditor::redo()
@@ -1145,7 +1182,9 @@ bool WaveformEditor::redo()
     const auto step = redoSteps.back();
     redoSteps.pop_back();
     undoSteps.push_back (step);
-    if (controller.getShow().isValid (step.cueId) && controller.getShow().cue (step.cueId).file == step.file)
+    if (step.recording)
+        restoreSong (step.cueId, step.cueBefore.file, step.cueAfter);
+    else if (controller.getShow().isValid (step.cueId) && controller.getShow().cue (step.cueId).file == step.file)
         restoreEdits (step.cueId, step.after);
     return true;
 }
@@ -1244,6 +1283,8 @@ void WaveformEditor::playPreview (bool fromCursor)
     if (id >= 1000)
         plan.output = { id % 1000, id < 2000 };
     plan.fadeOthers = false;
+    plan.preview = true;
+    controller.attachFx (plan);   // preview with the button's effects
     engine.play (plan);
 }
 

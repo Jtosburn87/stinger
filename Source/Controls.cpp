@@ -84,12 +84,14 @@ const std::vector<CommandMap::Command>& CommandMap::commands()
             b.key = key;
             c.push_back ({ id, name, b });
         };
-        add ("go", "GO (playlist)", juce::KeyPress (juce::KeyPress::spaceKey).getTextDescription());
-        add ("fadeNext", "Fade to next (playlist)", juce::KeyPress (juce::KeyPress::returnKey).getTextDescription());
+        add ("go", "GO (selected playlist)", juce::KeyPress (juce::KeyPress::spaceKey).getTextDescription());
+        add ("fadeNext", "Fade to next (selected playlist)", juce::KeyPress (juce::KeyPress::returnKey).getTextDescription());
         add ("stopAll", "Stop all", juce::KeyPress (juce::KeyPress::escapeKey).getTextDescription());
         add ("fadeAll", "Fade all");
-        add ("nextDown", "Playlist: NEXT one down");
-        add ("nextUp", "Playlist: NEXT one up");
+        add ("nextDown", "Selected playlist: NEXT one down");
+        add ("nextUp", "Selected playlist: NEXT one up");
+        for (int p = 0; p < 8; ++p)
+            add (("go" + juce::String (p + 1)).toRawUTF8(), "GO playlist " + juce::String (p + 1));
         add ("bankNext", "Next bank");
         add ("bankPrev", "Previous bank");
         for (int b = 0; b < 8; ++b)
@@ -97,6 +99,8 @@ const std::vector<CommandMap::Command>& CommandMap::commands()
                  b < 4 ? juce::KeyPress ('1' + b, juce::ModifierKeys::commandModifier, 0).getTextDescription() : juce::String());
         add ("edit", "Edit mode on/off", juce::KeyPress ('e', juce::ModifierKeys::commandModifier, 0).getTextDescription());
         add ("globalKeys", "Global keys on/off");
+        add ("selfDestruct", "Self Destruct on/off");
+        add ("resetColours", "Reset colours (Self Destruct)");
         static const char* rows[4] = { "123456", "QWERTY", "ASDFGH", "ZXCVBN" };
         for (int s = 0; s < 24; ++s)
             add (("slot" + juce::String (s + 1)).toRawUTF8(), "Button " + juce::String (s + 1) + " of the shown bank",

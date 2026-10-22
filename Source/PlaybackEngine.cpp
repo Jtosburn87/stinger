@@ -374,6 +374,15 @@ void PlaybackEngine::setVoiceLoop (int voice, bool loop)
     push (c);
 }
 
+void PlaybackEngine::setCueFx (int cueId, CueFx* fx)
+{
+    Command c;
+    c.type = Command::setFx;
+    c.id = cueId;
+    c.plan.fx = fx;
+    push (c);
+}
+
 void PlaybackEngine::swapCues (int a, int b)
 {
     Command c;
@@ -422,6 +431,7 @@ std::vector<PlaybackEngine::VoiceInfo> PlaybackEngine::getVoices() const
         info.voice = i;
         info.cueId = cue;
         info.tag = s.tag.load();
+        info.preview = s.preview.load();
         const auto position = s.position.load(), length = s.length.load();
         info.position = std::min (position, length) / sr;
         info.length = length / sr;
@@ -581,6 +591,16 @@ void PlaybackEngine::handleCommands()
                                 v.plan.cueId = c.id;
                         }
                     break;
+                case Command::setFx:
+                    for (auto& v : voices)
+                        if (v.active)
+                        {
+                            if (v.plan.cueId == c.id)
+                                v.plan.fx = c.plan.fx;
+                            if (v.hasFollow && v.next.cueId == c.id)
+                                v.next.fx = c.plan.fx;
+                        }
+                    break;
                 case Command::live:
                     for (auto& v : voices)
                         if (v.active && v.plan.cueId == c.id)
@@ -612,7 +632,7 @@ PlaybackEngine::Voice* PlaybackEngine::startVoice (const PlayPlan& plan, int blo
         const int first = plan.output.firstChannel, last = first + plan.output.numChannels();
         for (auto& v : voices)
         {
-            if (! v.active || (! plan.takeOverPlaylist && v.plan.tag != 0))
+            if (! v.active || (plan.playlist != 0 && v.plan.playlist == plan.playlist))
                 continue;
             const int vFirst = v.plan.output.firstChannel, vLast = vFirst + v.plan.output.numChannels();
             if (plan.takeOver == PlaybackMode::onePerOutput && (vLast <= first || vFirst >= last))
@@ -848,6 +868,7 @@ void PlaybackEngine::publishStatus()
         s.stopping.store (v.stopping);
         s.order.store (v.order);
         s.tag.store (v.plan.tag);
+        s.preview.store (v.plan.preview);
         s.hasFollow.store (v.active && v.hasFollow);
         s.looping.store (v.active && v.plan.loop);
         s.followAt.store (v.followAt);

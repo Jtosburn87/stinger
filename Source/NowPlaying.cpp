@@ -142,8 +142,9 @@ void NowPlaying::paint (juce::Graphics& g)
         {
             // a playlist Wait: the song is over, the next one starts when the count reaches 0
             juce::String next = "Next song";
-            if (auto* p = controller.currentPlaylist(); p != nullptr)
-                if (const int n = controller.getNextEntry(); n >= 0 && n < (int) p->entries.size()
+            const int pl = controller.playlistOfTag (v.tag);
+            if (auto* p = controller.playlistAt (pl); p != nullptr)
+                if (const int n = controller.getNextEntry (pl); n >= 0 && n < (int) p->entries.size()
                                                              && controller.getShow().isValid (p->entries[(size_t) n].cueId))
                     next = controller.getShow().cue (p->entries[(size_t) n].cueId).name;
             g.drawText ("Next: " + next, times.withTrimmedRight (90.0f), juce::Justification::bottomLeft, true);

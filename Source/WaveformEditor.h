@@ -22,6 +22,9 @@ public:
 
     bool undo();
     bool redo();
+    /** A recording just went onto button id (before = the button as it was): Undo puts the old song back (the
+        take stays on disk), Redo puts the take back. */
+    void recordedOver (int id, const Cue& before);
 
     // Selection edits (drag in the middle of the waveform to select). Nothing changes the audio file.
     bool hasSelection() const { return selection.getLength() > 0.0; }
@@ -85,6 +88,7 @@ private:
     void endEdit();
     void edited();
     void restoreEdits (int id, const Edits& e);
+    void restoreSong (int id, const juce::File& expected, const Cue& song);
     void refreshFields();
     void setFromField (juce::Label& field);
 
@@ -116,7 +120,14 @@ private:
     double cursor = -1.0;                  // preview cursor (file seconds), < 0 = none
     juce::Range<double> selection;         // file seconds, empty = none
 
-    struct Step { int cueId; juce::File file; Edits before, after; };   // file: skipped if the button got another song
+    struct Step
+    {
+        int cueId;
+        juce::File file;          // skipped if the button got another song
+        Edits before, after;
+        bool recording = false;   // a take replaced the button: cueBefore / cueAfter are the whole button
+        Cue cueBefore, cueAfter;
+    };
     std::vector<Step> undoSteps, redoSteps;
     Edits editStart;
     bool editing = false;

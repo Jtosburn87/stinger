@@ -25,6 +25,11 @@ struct Playlist
 {
     juce::String name;
     std::vector<PlaylistEntry> entries;
+    // runtime only
+    int uid = 0;                            // stays the same while playlists come and go
+    int nextUid = 0, onAirUid = 0;          // its entries GO plays next / that's playing (0 = none)
+
+    juce::String displayName (int index) const { return name.isEmpty() ? "Playlist " + juce::String (index + 1) : name; }
 };
 
 /** A show file: banks of buttons and playlists. Saved as JSON (*.stinger); audio files are referenced,
@@ -42,6 +47,7 @@ struct Show
     std::vector<Bank> banks;
     std::vector<Playlist> playlists;
     PlaybackMode playbackMode = PlaybackMode::oneAtATime;
+    bool selfDestruct = false;   // buttons go black after they've played
 
     Show() { reset(); }
     void reset();
@@ -75,9 +81,13 @@ public:
     PlaybackEngine& getEngine() { return engine; }
     AudioLoader& getLoader() { return loader; }
 
-    /** Puts a file on a button (keeps the button's other settings; resets edits if the file changes). */
+    /** Puts a file on a button (keeps the button's other settings; resets edits if the file changes).
+        A file from outside the show's Audio folder is copied into it first. */
     void assignFile (int id, const juce::File& file);
     void clearCue (int id);
+    /** Puts a button back as it was (undo / redo of a recording): file, name, edits and settings. The plugins
+        stay as they are now. */
+    void restoreCue (int id, const Cue& c);
     /** Two buttons change places (everything goes with the song: settings, keys, plugins, playlist entries). */
     void swapCues (int a, int b);
     /** The first empty button at or after id (on through the later banks), -1 if none. */
@@ -104,8 +114,21 @@ public:
     // Show file
     void newShow();
     bool openShow (const juce::File& f, juce::String& error);
+    /** Saves (making the show's folder). The first save of a new show moves its audio from Unsaved\Audio
+        into the show's own Audio folder. */
     bool saveShow (const juce::File& f, juce::String& error);
     juce::File getShowFile() const { return showFile; }
+
+    // Folders: Documents\Stinger\<show>\<show>.stinger + Audio\ (recordings, downloads, imported files)
+    juce::File getHomeFolder() const { return homeFolder; }
+    void setHomeFolderForTest (const juce::File& f) { homeFolder = f; }
+    /** Where a show called this is saved: Documents\Stinger\<name>\<name>.stinger. */
+    juce::File showFileFor (const juce::String& name) const;
+    /** The show's Audio folder (next to the show file), or Documents\Stinger\Unsaved\Audio before it's saved. */
+    juce::File getAudioFolder() const;
+    /** Copies a file into the Audio folder (unless it's there already; same name and size = already copied).
+        Returns the copy, or the file itself if it couldn't be copied. */
+    juce::File importFile (const juce::File& file);
     bool hasUnsavedChanges() const { return dirty; }
 
     /** For tests: load a cue's audio now, on this thread. */
@@ -119,6 +142,8 @@ public:
     PluginHost* getPluginHost() const { return host; }
     /** The button's running plugins, null if it has none. */
     CueFx* getFx (int id) const;
+    /** Gives a play its button's plugins (every play of a button goes through this). */
+    void attachFx (PlayPlan& plan) const;
     bool setPlugin (int id, int slot, const juce::PluginDescription& description, juce::String& error);
     void removePlugin (int id, int slot);
     void setPluginBypassed (int id, int slot, bool bypassed);
@@ -130,18 +155,25 @@ public:
     void setPluginForTest (int id, int slot, std::unique_ptr<juce::AudioProcessor> p);
 
     // ---- Playlists ----
-    int getPlaylistIndex() const { return playlistIndex; }
-    void setPlaylistIndex (int index);
-    Playlist* currentPlaylist();
+    // Every playlist has its own Next / On air and its own GO. The selected one (the box clicked last) is the one
+    // Space, Enter and the plain GO / Fade to next commands play.
+    int getSelectedPlaylist() const { return selectedPlaylist; }
+    void selectPlaylist (int index);
+    Playlist* playlistAt (int index);
+    Playlist* currentPlaylist() { return playlistAt (selectedPlaylist); }
+    /** Index of the playlist with this uid (Playlist::uid), -1 if it has gone. */
+    int playlistIndexOf (int playlistUid) const;
+    /** Index of the playlist a voice (VoiceInfo::tag) was started for, -1 = none. */
+    int playlistOfTag (int tag) const;
     int addPlaylist (const juce::String& name);
     void removePlaylist (int index);
+    /** An empty name goes back to "Playlist N". */
+    void renamePlaylist (int index, const juce::String& name);
 
-    void addToPlaylist (int cueId, int insertAt = -1);
-    void removeEntry (int index);
-    void moveEntry (int from, int to);
-    void setTransition (int index, Transition t, double crossfadeSeconds);
-    /** After changing a playlist directly (its name): marks the show changed. */
-    void playlistEdited() { dirty = true; sendChangeMessage(); }
+    void addToPlaylist (int playlist, int cueId, int insertAt = -1);
+    void removeEntry (int playlist, int index);
+    void moveEntry (int playlist, int from, int to);
+    void setTransition (int playlist, int index, Transition t, double crossfadeSeconds);
     void setPlaybackMode (PlaybackMode mode)
     {
         if (mode == show.playbackMode)
@@ -150,6 +182,13 @@ public:
         dirty = true;
         sendChangeMessage();
     }
+    /** Self Destruct: while on, each button goes black once it has played (ended or stopped). Saved in the show. */
+    void setSelfDestruct (bool on);
+    bool isSelfDestruct() const { return show.selfDestruct; }
+    /** Gives every black (spent) button its colour back. */
+    void resetColours();
+    void resetColour (int id);
+    bool anySpent() const;
     /** Renames a bank (the tab at the top; an empty name keeps the old one). */
     void renameBank (int bank, const juce::String& name)
     {
@@ -161,30 +200,35 @@ public:
         sendChangeMessage();
     }
 
-    /** The entry GO plays (index in the current playlist, -1 = none). */
-    int getNextEntry() const;
-    void setNextEntry (int index);
+    /** The entry GO plays (index in the playlist, -1 = none). */
+    int getNextEntry (int playlist) const;
+    void setNextEntry (int playlist, int index);
     /** The entry playing most recently started from the playlist, -1 = none. */
-    int getOnAirEntry() const;
+    int getOnAirEntry (int playlist) const;
 
-    /** GO: if a playlist song is looping until GO, it finishes its pass and the next song follows with no gap.
-        Otherwise plays the next entry; playlist songs still playing fade out (over the crossfade time if their
-        transition is a crossfade, else their stop fade). */
-    void go();
-    /** Fade to next: crossfades from what the playlist is playing into the next entry now, over the
-        playing entry's crossfade time. */
-    void fadeToNext();
-    void playEntry (int index, double fadeInSeconds = 0.0);
-    /** True while a playlist song loops until GO. */
-    bool isLoopingUntilGo() const;
+    /** GO: if one of the playlist's songs is looping until GO, it finishes its pass and the next song follows
+        with no gap. Otherwise plays the next entry; the playlist's songs still playing fade out (over the crossfade
+        time if their transition is a crossfade, else their stop fade). Other playlists' songs go by the show's
+        playback mode, as they do for a button. */
+    void go (int playlist);
+    /** Fade to next: crossfades from what the playlist is playing into its next entry now, over the playing
+        entry's crossfade time. */
+    void fadeToNext (int playlist);
+    void playEntry (int playlist, int index, double fadeInSeconds = 0.0);
+    /** True while one of the playlist's songs loops until GO. */
+    bool isLoopingUntilGo (int playlist) const;
 
     /** Call often (the controller's timer does): follows the playlist as songs start, queues the next links. */
     void updatePlaylist();
+    /** Call often (the controller's timer does): Self Destruct turns buttons black once they stop. */
+    void updateSelfDestruct();
 
 private:
-    int indexOfUid (int uid) const;
+    const Playlist* playlistAt (int index) const;
+    int indexOfUid (int playlist, int uid) const;
     int newUid() { return ++lastUid; }
-    void queueFollow (int tag, int uid);
+    void assignUids();
+    void queueFollow (int tag);
     void requeueFollows();
     bool makePlan (const PlaylistEntry& entry, int tag, PlayPlan& plan);
     double fadeSecondsFor (int tag);
@@ -196,7 +240,6 @@ private:
     void retireFx (int id);
     void pluginsGoing (CueFx& chain, int onlySlot = -1);
     void createPlugins (int id);
-    void attachFx (PlayPlan& plan) const;
     void timerCallback() override;
 
     PlaybackEngine& engine;
@@ -214,12 +257,15 @@ private:
     juce::StringArray missingPlugins;
     double loadedRate = 0.0;
     juce::File showFile;
+    juce::File homeFolder = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Stinger");
+    void moveUnsavedAudio (const juce::File& audioFolder);
+    std::set<int> destructing;   // buttons seen playing in Self Destruct mode: black once they stop
     bool dirty = false;
 
-    int playlistIndex = 0;
-    int nextUid = 0, onAirUid = 0;          // entries by uid (0 = none)
+    int selectedPlaylist = 0;
     int lastUid = 0, lastTag = 0;
     std::map<int, int> tagUid;              // voice tag -> the entry it plays
+    std::map<int, int> tagPlaylist;         // voice tag -> the playlist (uid) it was started for
     std::set<int> chained;                  // tags whose next song has been queued in the engine
     std::set<int> seen;                     // tags already seen playing
 };

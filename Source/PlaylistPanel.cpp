@@ -17,21 +17,32 @@ namespace
         }
         return {};
     }
+
+    /** Name of the button an entry of the playlist plays, "" if none. */
+    juce::String entryName (ShowController& c, int playlist, int entry)
+    {
+        auto* p = c.playlistAt (playlist);
+        if (p == nullptr || entry < 0 || entry >= (int) p->entries.size() || ! c.getShow().isValid (p->entries[(size_t) entry].cueId))
+            return {};
+        return c.getShow().cue (p->entries[(size_t) entry].cueId).name;
+    }
+
+    const juce::String dash = juce::String::fromUTF8 ("\xe2\x80\x94");
 }
 
 // ---------------------------------------------------------------------------------------------
 
-PlaylistRows::PlaylistRows (ShowController& c) : controller (c) {}
+PlaylistRows::PlaylistRows (ShowController& c, int playlistUid) : controller (c), uid (playlistUid) {}
 
 int PlaylistRows::entryCount()
 {
-    auto* p = controller.currentPlaylist();
+    auto* p = playlist();
     return p == nullptr ? 0 : (int) p->entries.size();
 }
 
 int PlaylistRows::contentHeight() const
 {
-    auto* p = const_cast<ShowController&> (controller).currentPlaylist();
+    auto* p = controller.playlistAt (index());
     const int n = p == nullptr ? 0 : (int) p->entries.size();
     return std::max (120, n * (rowHeight + chipHeight) + 8);
 }
@@ -43,7 +54,7 @@ juce::Rectangle<int> PlaylistRows::rowBounds (int i) const
 
 juce::Rectangle<int> PlaylistRows::chipBounds (int i)
 {
-    auto* p = controller.currentPlaylist();
+    auto* p = playlist();
     if (p == nullptr || i < 0 || i >= (int) p->entries.size())
         return {};
     const auto text = chipText (p->entries[(size_t) i]);
@@ -72,7 +83,7 @@ int PlaylistRows::insertIndexAt (int y)
 
 void PlaylistRows::paint (juce::Graphics& g)
 {
-    auto* p = controller.currentPlaylist();
+    auto* p = playlist();
     if (p == nullptr || p->entries.empty())
     {
         g.setColour (Look::textFaint);
@@ -82,7 +93,7 @@ void PlaylistRows::paint (juce::Graphics& g)
     }
     else
     {
-        const int onAir = controller.getOnAirEntry(), next = controller.getNextEntry();
+        const int onAir = controller.getOnAirEntry (index()), next = controller.getNextEntry (index());
         auto& show = controller.getShow();
         for (int i = 0; i < (int) p->entries.size(); ++i)
         {
@@ -171,6 +182,7 @@ void PlaylistRows::mouseDown (const juce::MouseEvent& e)
 {
     reordering = false;
     dragFrom = -1;
+    controller.selectPlaylist (index());
     if (const int c = chipAt (e.getPosition()); c >= 0)
     {
         showTransitionMenu (c);
@@ -185,7 +197,7 @@ void PlaylistRows::mouseDown (const juce::MouseEvent& e)
         return;
     }
     dragFrom = i;
-    controller.setNextEntry (i);
+    controller.setNextEntry (index(), i);
 }
 
 void PlaylistRows::mouseDrag (const juce::MouseEvent& e)
@@ -200,7 +212,7 @@ void PlaylistRows::mouseDrag (const juce::MouseEvent& e)
 void PlaylistRows::mouseUp (const juce::MouseEvent&)
 {
     if (reordering && dragFrom >= 0 && dropAt >= 0)
-        controller.moveEntry (dragFrom, dropAt > dragFrom ? dropAt - 1 : dropAt);
+        controller.moveEntry (index(), dragFrom, dropAt > dragFrom ? dropAt - 1 : dropAt);
     reordering = false;
     dragFrom = dropAt = -1;
     repaint();
@@ -210,7 +222,7 @@ void PlaylistRows::mouseDoubleClick (const juce::MouseEvent& e)
 {
     const int i = rowAt (e.y);
     if (i >= 0 && i < entryCount() && chipAt (e.getPosition()) < 0)
-        controller.playEntry (i);
+        controller.playEntry (index(), i);
 }
 
 void PlaylistRows::showRowMenu (int i)
@@ -226,15 +238,16 @@ void PlaylistRows::showRowMenu (int i)
         if (safe == nullptr)
             return;
         auto& c = safe->controller;
-        if (result == 1) c.playEntry (i);
-        else if (result == 2) c.setNextEntry (i);
-        else if (result == 3) c.removeEntry (i);
+        const int pl = safe->index();
+        if (result == 1) c.playEntry (pl, i);
+        else if (result == 2) c.setNextEntry (pl, i);
+        else if (result == 3) c.removeEntry (pl, i);
     });
 }
 
 void PlaylistRows::showTransitionMenu (int i)
 {
-    auto* p = controller.currentPlaylist();
+    auto* p = playlist();
     if (p == nullptr || i >= (int) p->entries.size())
         return;
     const auto current = p->entries[(size_t) i];
@@ -274,12 +287,13 @@ void PlaylistRows::showTransitionMenu (int i)
         if (safe == nullptr || result == 0)
             return;
         auto& c = safe->controller;
-        if (result == 1) c.setTransition (i, Transition::stop, current.crossfadeSeconds);
-        else if (result == 2) c.setTransition (i, Transition::playNext, current.crossfadeSeconds);
-        else if (result >= 10 && result < 16) c.setTransition (i, Transition::crossfade, times[result - 10]);
-        else if (result == 3) c.setTransition (i, Transition::loopUntil, current.crossfadeSeconds);
-        else if (result >= 30 && result < 36) c.setTransition (i, Transition::loopUntil, times[result - 30]);
-        else if (result >= 40 && result < 48) c.setTransition (i, Transition::wait, waitTimes[result - 40]);
+        const int pl = safe->index();
+        if (result == 1) c.setTransition (pl, i, Transition::stop, current.crossfadeSeconds);
+        else if (result == 2) c.setTransition (pl, i, Transition::playNext, current.crossfadeSeconds);
+        else if (result >= 10 && result < 16) c.setTransition (pl, i, Transition::crossfade, times[result - 10]);
+        else if (result == 3) c.setTransition (pl, i, Transition::loopUntil, current.crossfadeSeconds);
+        else if (result >= 30 && result < 36) c.setTransition (pl, i, Transition::loopUntil, times[result - 30]);
+        else if (result >= 40 && result < 48) c.setTransition (pl, i, Transition::wait, waitTimes[result - 40]);
         else if (result == 20 || result == 21)
         {
             const bool wait = result == 21;
@@ -292,7 +306,8 @@ void PlaylistRows::showTransitionMenu (int i)
             w->enterModalState (true, juce::ModalCallbackFunction::create ([safe, i, w, wait] (int ok)
             {
                 if (safe != nullptr && ok == 1)
-                    safe->controller.setTransition (i, wait ? Transition::wait : Transition::crossfade, w->getTextEditorContents ("seconds").getDoubleValue());
+                    safe->controller.setTransition (safe->index(), i, wait ? Transition::wait : Transition::crossfade,
+                                                    w->getTextEditorContents ("seconds").getDoubleValue());
             }), true);
         }
     });
@@ -318,7 +333,7 @@ void PlaylistRows::itemDragExit (const SourceDetails&)
 void PlaylistRows::itemDropped (const SourceDetails& d)
 {
     const int id = d.description.toString().fromFirstOccurrenceOf ("cue:", false, false).getIntValue();
-    controller.addToPlaylist (id, insertIndexAt (d.localPosition.y));
+    controller.addToPlaylist (index(), id, insertIndexAt (d.localPosition.y));
     dropAt = -1;
     repaint();
 }
@@ -337,13 +352,18 @@ void PlaylistRows::fileDragExit (const juce::StringArray&)
 
 void PlaylistRows::filesDropped (const juce::StringArray& dropped, int, int y)
 {
+    addFiles (controller, index(), dropped, insertIndexAt (y), getBank ? getBank() : 0);
+    dropAt = -1;
+    repaint();
+}
+
+void PlaylistRows::addFiles (ShowController& controller, int playlist, const juce::StringArray& dropped, int at, int startBank)
+{
     // each file (in name order) goes onto the next empty button (from the shown bank on) and into the playlist
     auto files = dropped;
     std::sort (files.begin(), files.end(), [] (const juce::String& a, const juce::String& b)
                { return juce::File (a).getFileName().compareNatural (juce::File (b).getFileName()) < 0; });
-    int at = insertIndexAt (y);
     auto& show = controller.getShow();
-    const int startBank = getBank ? getBank() : 0;
     for (auto& path : files)
     {
         int free = -1;
@@ -357,27 +377,18 @@ void PlaylistRows::filesDropped (const juce::StringArray& dropped, int, int y)
         if (free < 0)
             break;
         controller.assignFile (free, juce::File (path));
-        controller.addToPlaylist (free, at++);
+        controller.addToPlaylist (playlist, free, at);
+        if (at >= 0)
+            ++at;
     }
-    dropAt = -1;
-    repaint();
 }
 
 // ---------------------------------------------------------------------------------------------
 
-PlaylistPanel::PlaylistPanel (ShowController& c) : controller (c), rows (c)
+PlaylistView::PlaylistView (ShowController& c, int playlistUid) : controller (c), uid (playlistUid), rows (c, playlistUid)
 {
-    picker.onChange = [this]
-    {
-        if (picker.getSelectedItemIndex() >= 0)
-            controller.setPlaylistIndex (picker.getSelectedItemIndex());
-    };
-    picker.setWantsKeyboardFocus (false);
-    addAndMakeVisible (picker);
-
-    menuButton.setTooltip ("New, rename or delete playlists");
+    menuButton.setTooltip ("Rename or delete this playlist");
     menuButton.setWantsKeyboardFocus (false);
-    menuButton.onClick = [this] { showPlaylistMenu(); };
     addAndMakeVisible (menuButton);
 
     viewport.setViewedComponent (&rows, false);
@@ -391,112 +402,102 @@ PlaylistPanel::PlaylistPanel (ShowController& c) : controller (c), rows (c)
 
     goButton.setColour (juce::TextButton::buttonColourId, Look::goGreen);
     goButton.getProperties().set ("big", true);
-    goButton.setTooltip ("Play the next song in the playlist (Space)");
+    goButton.setTooltip ("Play the next song in this playlist");
     goButton.setWantsKeyboardFocus (false);
-    goButton.onClick = [this] { controller.go(); };
+    goButton.onClick = [this] { controller.selectPlaylist (index()); controller.go (index()); };
     addAndMakeVisible (goButton);
 
-    fadeNextButton.setTooltip ("Crossfade into the next song now (Enter)");
+    fadeNextButton.setTooltip ("Crossfade into this playlist's next song now");
     fadeNextButton.setWantsKeyboardFocus (false);
-    fadeNextButton.onClick = [this] { controller.fadeToNext(); };
+    fadeNextButton.onClick = [this] { controller.selectPlaylist (index()); controller.fadeToNext (index()); };
     addAndMakeVisible (fadeNextButton);
-    startTimerHz (5);
 
+    setWantsKeyboardFocus (true);
+    addMouseListener (this, true);   // any click gives this window's keys to the view (then on to the main window)
+    startTimerHz (5);
     controller.addChangeListener (this);
     refresh();
 }
 
-PlaylistPanel::~PlaylistPanel()
+PlaylistView::~PlaylistView()
 {
     controller.removeChangeListener (this);
 }
 
-void PlaylistPanel::changeListenerCallback (juce::ChangeBroadcaster*)
+void PlaylistView::changeListenerCallback (juce::ChangeBroadcaster*)
 {
     refresh();
 }
 
-void PlaylistPanel::refresh()
+void PlaylistView::refresh()
 {
-    auto& lists = controller.getShow().playlists;
-    picker.clear (juce::dontSendNotification);
-    for (int i = 0; i < (int) lists.size(); ++i)
-        picker.addItem (lists[(size_t) i].name.isEmpty() ? "Playlist " + juce::String (i + 1) : lists[(size_t) i].name, i + 1);
-    picker.setSelectedItemIndex (controller.getPlaylistIndex(), juce::dontSendNotification);
-
-    juce::String next = "Next: ";
-    const int n = controller.getNextEntry();
-    auto* p = controller.currentPlaylist();
-    if (p != nullptr && n >= 0 && n < (int) p->entries.size() && controller.getShow().isValid (p->entries[(size_t) n].cueId))
-        next << controller.getShow().cue (p->entries[(size_t) n].cueId).name;
-    else
-        next << juce::String::fromUTF8 ("\xe2\x80\x94");
-    shownLooping = controller.isLoopingUntilGo();
+    const int pl = index();
+    const int n = controller.getNextEntry (pl);
+    juce::String next = "Next: " + (n >= 0 ? entryName (controller, pl, n) : dash);
+    shownLooping = controller.isLoopingUntilGo (pl);
     if (shownLooping)
-        next = juce::String::fromUTF8 ("\xe2\x86\xbb Looping \xe2\x80\x94 GO finishes it, Enter fades to next");
+        next = juce::String::fromUTF8 ("\xe2\x86\xbb Looping \xe2\x80\x94 GO finishes it, FADE TO NEXT fades");
     nextLabel.setText (next, juce::dontSendNotification);
     goButton.setEnabled (n >= 0 || shownLooping);
     fadeNextButton.setEnabled (n >= 0);
 
     rows.setSize (viewport.getMaximumVisibleWidth() > 0 ? viewport.getMaximumVisibleWidth() : getWidth(), rows.contentHeight());
     rows.repaint();
+    repaint (0, 0, getWidth(), 48);
 }
 
-void PlaylistPanel::showPlaylistMenu()
+void PlaylistView::paint (juce::Graphics& g)
 {
-    juce::PopupMenu m;
-    m.addItem (1, "New playlist");
-    m.addItem (2, "Rename playlist...");
-    m.addItem (3, "Delete playlist", controller.getShow().playlists.size() > 1);
-    juce::Component::SafePointer<PlaylistPanel> safe (this);
-    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (menuButton), [safe] (int result)
+    g.fillAll (Look::sidePanel);
+    const int pl = index();
+    auto* p = controller.playlistAt (pl);
+    const bool selected = pl == controller.getSelectedPlaylist();
+    g.setColour (juce::Colour (0xffc9d0d8));
+    g.setFont (Look::condensed (18.0f));
+    g.drawText (p != nullptr ? p->displayName (pl).toUpperCase() : juce::String(), 16, 12, getWidth() - 64, 24,
+                juce::Justification::centredLeft, true);
+    if (selected)
     {
-        if (safe == nullptr)
-            return;
-        auto& c = safe->controller;
-        if (result == 1)
-            c.addPlaylist ("Playlist " + juce::String ((int) c.getShow().playlists.size() + 1));
-        else if (result == 2)
+        g.setColour (Look::blue);
+        g.fillRect (0, 0, getWidth(), 3);
+    }
+    g.setColour (Look::line);
+    g.fillRect (0, getHeight() - 140, getWidth(), 1);
+}
+
+void PlaylistView::resized()
+{
+    auto r = getLocalBounds();
+    auto head = r.removeFromTop (48).reduced (12, 10);
+    menuButton.setBounds (head.removeFromRight (30));
+    menuButton.onClick = [this]
+    {
+        juce::PopupMenu m;
+        m.addItem (1, "Rename playlist...");
+        m.addItem (2, "Delete playlist", controller.getShow().playlists.size() > 1);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (menuButton),
+                         [safe = juce::Component::SafePointer<PlaylistView> (this)] (int result)
         {
+            if (safe == nullptr || result == 0)
+                return;
+            auto& c = safe->controller;
+            const int pl = safe->index();
+            if (result == 2)
+            {
+                c.removePlaylist (pl);   // its window closes with it
+                return;
+            }
             auto* w = new juce::AlertWindow ("Rename playlist", {}, juce::MessageBoxIconType::NoIcon);
-            w->addTextEditor ("name", c.currentPlaylist() != nullptr ? c.currentPlaylist()->name : juce::String());
+            w->addTextEditor ("name", c.playlistAt (pl) != nullptr ? c.playlistAt (pl)->name : juce::String());
             w->addButton ("OK", 1, juce::KeyPress (juce::KeyPress::returnKey));
             w->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
             w->enterModalState (true, juce::ModalCallbackFunction::create ([safe, w] (int ok)
             {
-                if (safe == nullptr || ok != 1)
-                    return;
-                if (auto* p = safe->controller.currentPlaylist())
-                {
-                    p->name = w->getTextEditorContents ("name").trim();
-                    safe->controller.playlistEdited();
-                }
+                if (safe != nullptr && ok == 1)
+                    safe->controller.renamePlaylist (safe->index(), w->getTextEditorContents ("name"));
             }), true);
-        }
-        else if (result == 3)
-            c.removePlaylist (c.getPlaylistIndex());
-    });
-}
-
-void PlaylistPanel::paint (juce::Graphics& g)
-{
-    g.fillAll (Look::sidePanel);
-    g.setColour (Look::line);
-    g.fillRect (getWidth() - 1, 0, 1, getHeight());
-    g.setColour (juce::Colour (0xffc9d0d8));
-    g.setFont (Look::condensed (18.0f));
-    g.drawText ("PLAYLIST", 16, 12, 120, 24, juce::Justification::centredLeft);
-    g.setColour (Look::line);
-    g.fillRect (0, getHeight() - 140, getWidth() - 1, 1);
-}
-
-void PlaylistPanel::resized()
-{
-    auto r = getLocalBounds().withTrimmedRight (1);
-    auto head = r.removeFromTop (48).reduced (12, 10).withTrimmedLeft (96);
-    menuButton.setBounds (head.removeFromRight (30));
-    head.removeFromRight (4);
-    picker.setBounds (head);
+        });
+    };
 
     auto bottom = r.removeFromBottom (140).reduced (12);
     nextLabel.setBounds (bottom.removeFromTop (22));
@@ -509,8 +510,397 @@ void PlaylistPanel::resized()
     refresh();
 }
 
+void PlaylistView::timerCallback()
+{
+    if (controller.isLoopingUntilGo (index()) != shownLooping)
+        refresh();
+}
+
+// ---------------------------------------------------------------------------------------------
+
+/** One playlist in the left column: name, what's on air / next, GO, open-in-window and menu buttons.
+    Click = select it (Space / Enter play the selected one), double-click = open its window, right-click = menu.
+    A button or audio files dropped on it go to the end. */
+class PlaylistPanel::Box : public juce::Component,
+                           public juce::DragAndDropTarget,
+                           public juce::FileDragAndDropTarget
+{
+public:
+    Box (PlaylistPanel& p, int playlistUid) : uid (playlistUid), panel (p), controller (p.controller)
+    {
+        goButton.setColour (juce::TextButton::buttonColourId, Look::goGreen);
+        goButton.getProperties().set ("big", true);
+        goButton.setTooltip ("Play this playlist's next song");
+        goButton.setWantsKeyboardFocus (false);
+        goButton.onClick = [this] { controller.selectPlaylist (index()); controller.go (index()); };
+        addAndMakeVisible (goButton);
+
+        windowButton.setTooltip ("Open this playlist in its own window (all its songs and transitions)");
+        windowButton.setWantsKeyboardFocus (false);
+        windowButton.onClick = [this] { panel.openWindow (index()); };
+        addAndMakeVisible (windowButton);
+
+        menuButton.setTooltip ("GO, fade to next, rename, delete...");
+        menuButton.setWantsKeyboardFocus (false);
+        menuButton.onClick = [this] { panel.showMenu (index(), &menuButton); };
+        addAndMakeVisible (menuButton);
+    }
+
+    const int uid;
+
+    int index() const { return controller.playlistIndexOf (uid); }
+
+    /** Updates GO and repaints if what the box shows has changed. */
+    void update()
+    {
+        const int pl = index();
+        const bool looping = controller.isLoopingUntilGo (pl);
+        const int next = controller.getNextEntry (pl), onAir = controller.getOnAirEntry (pl);
+        auto* p = controller.playlistAt (pl);
+        const auto state = juce::String (pl) + "|" + (p != nullptr ? p->displayName (pl) + "|" + juce::String ((int) p->entries.size()) : juce::String())
+                         + "|" + juce::String (next) + entryName (controller, pl, next) + "|" + juce::String (onAir) + entryName (controller, pl, onAir)
+                         + "|" + juce::String ((int) looping) + juce::String ((int) (pl == controller.getSelectedPlaylist()));
+        goButton.setEnabled (next >= 0 || looping);
+        if (state != shown)
+        {
+            shown = state;
+            repaint();
+        }
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        const int pl = index();
+        auto* p = controller.playlistAt (pl);
+        if (p == nullptr)
+            return;
+        const bool selected = pl == controller.getSelectedPlaylist();
+        auto r = getLocalBounds().toFloat().reduced (0.5f);
+        g.setColour (dragOver ? juce::Colour (0xff172636) : Look::panel);
+        g.fillRoundedRectangle (r, 7.0f);
+        g.setColour (dragOver ? Look::blue : selected ? Look::blue.withAlpha (0.85f) : Look::edge);
+        g.drawRoundedRectangle (r, 7.0f, selected || dragOver ? 2.0f : 1.0f);
+
+        auto in = getLocalBounds().reduced (10, 6);
+        auto head = in.removeFromTop (26).withTrimmedRight (64);
+        g.setColour (selected ? Look::text : juce::Colour (0xffc9d0d8));
+        g.setFont (Look::condensed (17.0f));
+        const auto name = p->displayName (pl).toUpperCase();
+        const int nameWidth = std::min (head.getWidth(), (int) Look::textWidth (g.getCurrentFont(), name) + 2);
+        g.drawText (name, head.removeFromLeft (nameWidth), juce::Justification::centredLeft, true);
+        g.setColour (Look::textFaint);
+        g.setFont (Look::font (11.0f));
+        const int n = (int) p->entries.size();
+        g.drawText (juce::String::fromUTF8 ("  \xc2\xb7  ") + juce::String (n) + (n == 1 ? " song" : " songs"), head,
+                    juce::Justification::centredLeft, true);
+
+        in.removeFromTop (4);
+        auto lines = in.withTrimmedRight (goWidth + 8);
+        auto line = [&] (const juce::String& tag, juce::Colour tagColour, juce::Colour tagText, const juce::String& text, juce::Colour textColour)
+        {
+            auto row = lines.removeFromTop (lines.getHeight() / 2 + (lines.getHeight() % 2));
+            if (row.getHeight() > 24)
+                row = row.withSizeKeepingCentre (row.getWidth(), 24);
+            g.setFont (Look::font (9.5f, true));
+            auto t = row.removeFromLeft (46).withSizeKeepingCentre (44, 15).toFloat();
+            g.setColour (tagColour);
+            g.fillRoundedRectangle (t, 3.0f);
+            g.setColour (tagText);
+            g.drawText (tag, t, juce::Justification::centred);
+            g.setColour (textColour);
+            g.setFont (Look::font (13.0f));
+            g.drawText (text, row.withTrimmedLeft (6), juce::Justification::centredLeft, true);
+        };
+        const int onAir = controller.getOnAirEntry (pl), next = controller.getNextEntry (pl);
+        if (onAir >= 0)
+            line ("ON AIR", Look::amber, juce::Colour (0xff1a1206), entryName (controller, pl, onAir), juce::Colour (0xfff5c77e));
+        else
+            line ("ON AIR", Look::raised, Look::textFaint, dash, Look::textFaint);
+        if (controller.isLoopingUntilGo (pl))
+            line ("NEXT", Look::goGreen, juce::Colours::white, juce::String::fromUTF8 ("\xe2\x86\xbb looping, GO finishes it"), Look::textDim);
+        else if (next >= 0)
+            line ("NEXT", Look::goGreen, juce::Colours::white, entryName (controller, pl, next), Look::text);
+        else
+            line ("NEXT", Look::raised, Look::textFaint, n == 0 ? juce::String ("drop buttons here") : dash, Look::textFaint);
+    }
+
+    void resized() override
+    {
+        auto in = getLocalBounds().reduced (10, 6);
+        auto head = in.removeFromTop (26);
+        menuButton.setBounds (head.removeFromRight (28).reduced (0, 1));
+        head.removeFromRight (4);
+        windowButton.setBounds (head.removeFromRight (28).reduced (0, 1));
+        in.removeFromTop (4);
+        goButton.setBounds (in.removeFromRight (goWidth));
+    }
+
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        controller.selectPlaylist (index());
+        if (e.mods.isPopupMenu())
+            panel.showMenu (index(), nullptr);
+    }
+
+    void mouseDoubleClick (const juce::MouseEvent&) override { panel.openWindow (index()); }
+
+    bool isInterestedInDragSource (const SourceDetails& d) override { return d.description.toString().startsWith ("cue:"); }
+    void itemDragEnter (const SourceDetails&) override { setDragOver (true); }
+    void itemDragExit (const SourceDetails&) override { setDragOver (false); }
+    void itemDropped (const SourceDetails& d) override
+    {
+        setDragOver (false);
+        controller.addToPlaylist (index(), d.description.toString().fromFirstOccurrenceOf ("cue:", false, false).getIntValue());
+    }
+
+    bool isInterestedInFileDrag (const juce::StringArray&) override { return true; }
+    void fileDragEnter (const juce::StringArray&, int, int) override { setDragOver (true); }
+    void fileDragExit (const juce::StringArray&) override { setDragOver (false); }
+    void filesDropped (const juce::StringArray& files, int, int) override
+    {
+        setDragOver (false);
+        PlaylistRows::addFiles (controller, index(), files, -1, panel.getBank ? panel.getBank() : 0);
+    }
+
+private:
+    void setDragOver (bool on)
+    {
+        dragOver = on;
+        repaint();
+    }
+
+    static constexpr int goWidth = 70;
+    PlaylistPanel& panel;
+    ShowController& controller;
+    juce::TextButton goButton { "GO" }, windowButton { juce::String::fromUTF8 ("\xe2\xa7\x89") },
+                     menuButton { juce::String::fromUTF8 ("\xe2\x8b\xaf") };
+    juce::String shown;
+    bool dragOver = false;
+};
+
+/** A playlist in its own window. It doesn't block the main window; keys typed in it work as they do there. */
+class PlaylistPanel::Window : public juce::DocumentWindow
+{
+public:
+    Window (PlaylistPanel& p, int playlistUid)
+        : juce::DocumentWindow ("Playlist", Look::panel, juce::DocumentWindow::allButtons), panel (p), uid (playlistUid)
+    {
+        auto* view = new PlaylistView (p.controller, playlistUid);
+        view->onKey = [&p] (const juce::KeyPress& key) { return p.onKey != nullptr && p.onKey (key); };
+        view->getRows().getBank = [&p] { return p.getBank ? p.getBank() : 0; };
+        setUsingNativeTitleBar (true);
+        setContentOwned (view, false);
+        setResizable (true, false);
+        setResizeLimits (300, 360, 1200, 2000);
+        setAlwaysOnTop (true);   // stays in view while the main window is used
+        auto screen = p.getScreenBounds();
+        setBounds (screen.getRight() + 12, screen.getY(), 380, std::max (480, std::min (760, screen.getHeight())));
+        if (auto* display = juce::Desktop::getInstance().getDisplays().getDisplayForRect (screen))
+            setBounds (getBounds().constrainedWithin (display->userArea));
+        updateTitle();
+        setVisible (true);
+    }
+
+    void updateTitle()
+    {
+        const int pl = panel.controller.playlistIndexOf (uid);
+        if (auto* p = panel.controller.playlistAt (pl))
+            setName (p->displayName (pl) + juce::String::fromUTF8 (" \xe2\x80\x94 Stinger"));
+    }
+
+    void closeButtonPressed() override
+    {
+        // the panel owns the window: let it go after this call has returned
+        juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<PlaylistPanel> (&panel), id = uid]
+                                         { if (safe != nullptr) safe->windows.erase (id); });
+    }
+
+private:
+    PlaylistPanel& panel;
+    const int uid;
+};
+
+// ---------------------------------------------------------------------------------------------
+
+PlaylistPanel::PlaylistPanel (ShowController& c) : controller (c)
+{
+    addButton.setTooltip ("New playlist");
+    addButton.setWantsKeyboardFocus (false);
+    addButton.onClick = [this]
+    {
+        controller.addPlaylist ({});
+        refresh();
+        if (! boxes.isEmpty())
+            viewport.setViewPosition (0, boxHolder.getHeight());   // show the new one at the bottom
+    };
+    addAndMakeVisible (addButton);
+
+    viewport.setViewedComponent (&boxHolder, false);
+    viewport.setScrollBarsShown (true, false);
+    viewport.setScrollBarThickness (8);
+    addAndMakeVisible (viewport);
+
+    startTimerHz (5);
+    controller.addChangeListener (this);
+    refresh();
+}
+
+PlaylistPanel::~PlaylistPanel()
+{
+    windows.clear();
+    controller.removeChangeListener (this);
+}
+
+void PlaylistPanel::changeListenerCallback (juce::ChangeBroadcaster*)
+{
+    refresh();
+}
+
 void PlaylistPanel::timerCallback()
 {
-    if (controller.isLoopingUntilGo() != shownLooping)
-        refresh();
+    for (auto* b : boxes)
+        b->update();   // Loop until GO starts and ends without a change message
+}
+
+void PlaylistPanel::refresh()
+{
+    auto& lists = controller.getShow().playlists;
+    bool same = boxes.size() == (int) lists.size();
+    for (int i = 0; same && i < boxes.size(); ++i)
+        same = boxes[i]->uid == lists[(size_t) i].uid;
+    if (! same)
+    {
+        boxes.clear();
+        for (auto& p : lists)
+            boxHolder.addAndMakeVisible (boxes.add (new Box (*this, p.uid)));
+        layoutBoxes();
+    }
+    for (auto* b : boxes)
+        b->update();
+
+    // windows of playlists that have gone close; the rest follow renames
+    for (auto it = windows.begin(); it != windows.end();)
+    {
+        if (controller.playlistIndexOf (it->first) < 0)
+            it = windows.erase (it);
+        else
+        {
+            it->second->updateTitle();
+            ++it;
+        }
+    }
+}
+
+void PlaylistPanel::layoutBoxes()
+{
+    const int width = viewport.getMaximumVisibleWidth() > 0 ? viewport.getMaximumVisibleWidth() : getWidth();
+    boxHolder.setSize (width, boxGap + boxes.size() * (boxHeight + boxGap));
+    for (int i = 0; i < boxes.size(); ++i)
+        boxes[i]->setBounds (12, boxGap + i * (boxHeight + boxGap), width - 22, boxHeight);
+}
+
+void PlaylistPanel::openWindow (int playlist)
+{
+    auto* p = controller.playlistAt (playlist);
+    if (p == nullptr)
+        return;
+    controller.selectPlaylist (playlist);
+    auto& w = windows[p->uid];
+    if (w == nullptr)
+        w = std::make_unique<Window> (*this, p->uid);
+    w->setVisible (true);
+    w->toFront (true);
+}
+
+void PlaylistPanel::rename (int playlist)
+{
+    auto* p = controller.playlistAt (playlist);
+    if (p == nullptr)
+        return;
+    const int uid = p->uid;
+    auto* w = new juce::AlertWindow ("Rename playlist", {}, juce::MessageBoxIconType::NoIcon);
+    w->addTextEditor ("name", p->name);
+    w->addButton ("OK", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    w->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    w->enterModalState (true, juce::ModalCallbackFunction::create ([safe = juce::Component::SafePointer<PlaylistPanel> (this), w, uid] (int ok)
+    {
+        if (safe != nullptr && ok == 1)
+            safe->controller.renamePlaylist (safe->controller.playlistIndexOf (uid), w->getTextEditorContents ("name"));
+    }), true);
+}
+
+void PlaylistPanel::showMenu (int playlist, juce::Component* target)
+{
+    auto* p = controller.playlistAt (playlist);
+    if (p == nullptr)
+        return;
+    const int uid = p->uid;
+    const bool looping = controller.isLoopingUntilGo (playlist);
+    const bool hasNext = controller.getNextEntry (playlist) >= 0;
+    juce::PopupMenu m;
+    m.addSectionHeader (p->displayName (playlist));
+    m.addItem (1, looping ? "GO (finish the loop)" : "GO", hasNext || looping);
+    m.addItem (2, "Fade to next", hasNext);
+    m.addSeparator();
+    m.addItem (3, "Open in its own window");
+    m.addItem (4, "Rename...");
+    m.addItem (5, "Delete playlist", controller.getShow().playlists.size() > 1);
+    m.addSeparator();
+    m.addItem (6, "New playlist");
+    auto options = target != nullptr ? juce::PopupMenu::Options().withTargetComponent (target)
+                                     : juce::PopupMenu::Options().withMousePosition();
+    m.showMenuAsync (options, [safe = juce::Component::SafePointer<PlaylistPanel> (this), uid] (int result)
+    {
+        if (safe == nullptr || result == 0)
+            return;
+        auto& c = safe->controller;
+        const int pl = c.playlistIndexOf (uid);
+        if (pl < 0 && result != 6)
+            return;
+        switch (result)
+        {
+            case 1: c.go (pl); break;
+            case 2: c.fadeToNext (pl); break;
+            case 3: safe->openWindow (pl); break;
+            case 4: safe->rename (pl); break;
+            case 5:
+            {
+                auto* list = c.playlistAt (pl);
+                if (list->entries.empty())
+                    c.removePlaylist (pl);
+                else
+                    juce::AlertWindow::showAsync (juce::MessageBoxOptions::makeOptionsOkCancel (juce::MessageBoxIconType::QuestionIcon,
+                                                      "Delete playlist", "Delete \"" + list->displayName (pl) + "\" and its "
+                                                      + juce::String ((int) list->entries.size()) + " songs? (The buttons stay.)",
+                                                      "Delete", "Cancel", safe.getComponent()),
+                                                  [safe, uid] (int ok)
+                                                  {
+                                                      if (safe != nullptr && ok == 1)
+                                                          safe->controller.removePlaylist (safe->controller.playlistIndexOf (uid));
+                                                  });
+                break;
+            }
+            case 6: c.addPlaylist ({}); break;
+            default: break;
+        }
+    });
+}
+
+void PlaylistPanel::paint (juce::Graphics& g)
+{
+    g.fillAll (Look::sidePanel);
+    g.setColour (Look::line);
+    g.fillRect (getWidth() - 1, 0, 1, getHeight());
+    g.setColour (juce::Colour (0xffc9d0d8));
+    g.setFont (Look::condensed (18.0f));
+    g.drawText ("PLAYLISTS", 16, 12, 140, 24, juce::Justification::centredLeft);
+}
+
+void PlaylistPanel::resized()
+{
+    auto r = getLocalBounds().withTrimmedRight (1);
+    auto head = r.removeFromTop (48).reduced (12, 10);
+    addButton.setBounds (head.removeFromRight (30));
+    viewport.setBounds (r);
+    layoutBoxes();
 }

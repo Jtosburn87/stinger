@@ -304,7 +304,7 @@ void ControlSurface::sendFeedback()
     auto& engine = controller.getEngine();
     int nextCue = -1;
     if (auto* p = controller.currentPlaylist(); p != nullptr)
-        if (const int n = controller.getNextEntry(); n >= 0 && n < (int) p->entries.size())
+        if (const int n = controller.getNextEntry (controller.getSelectedPlaylist()); n >= 0 && n < (int) p->entries.size())
             nextCue = p->entries[(size_t) n].cueId;
 
     auto stateOf = [&] (int id)
@@ -337,7 +337,10 @@ void ControlSurface::sendFeedback()
     const int bank = shownBank ? shownBank() : 0;
     for (int s = 0; s < Show::cuesPerBank; ++s)
         send (commands.get ("slot" + juce::String (s + 1)).midi, stateOf (Show::cueId (bank, s)));
-    send (commands.get ("go").midi, controller.isLoopingUntilGo() || controller.getNextEntry() >= 0 ? levels.next : 0);
+    auto goState = [&] (int pl) { return controller.isLoopingUntilGo (pl) || controller.getNextEntry (pl) >= 0 ? levels.next : 0; };
+    send (commands.get ("go").midi, goState (controller.getSelectedPlaylist()));
+    for (int p = 0; p < 8; ++p)
+        send (commands.get ("go" + juce::String (p + 1)).midi, p < (int) show.playlists.size() ? goState (p) : 0);
     bool anyPlaying = ! engine.getVoices().empty();
     send (commands.get ("stopAll").midi, anyPlaying ? levels.playing : 0);
     send (commands.get ("fadeAll").midi, anyPlaying ? levels.playing : 0);

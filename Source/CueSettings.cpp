@@ -251,8 +251,8 @@ void CueSettings::refresh()
     if (! name.hasKeyboardFocus (true))
         name.setText (c.name, false);
     output.setSelectedId ((c.output.stereo ? 1000 : 2000) + c.output.firstChannel, juce::dontSendNotification);
-    colourButton.setColour (juce::TextButton::buttonColourId, Look::colourOf (c));
-    colourButton.setColour (juce::TextButton::textColourOffId, Look::textOn (Look::colourOf (c)));
+    colourButton.setColour (juce::TextButton::buttonColourId, Look::baseColourOf (c));
+    colourButton.setColour (juce::TextButton::textColourOffId, Look::textOn (Look::baseColourOf (c)));
     level.setValue (c.levelDb, juce::dontSendNotification);
     pan.setValue (c.pan, juce::dontSendNotification);
     fadeIn.seconds.setValue (c.fadeIn.seconds, juce::dontSendNotification);
@@ -429,10 +429,7 @@ void CueSettings::applyArm()
 
 juce::File CueSettings::recordingFolder() const
 {
-    const auto show = controller.getShowFile();
-    if (show != juce::File())
-        return show.getParentDirectory().getChildFile (show.getFileNameWithoutExtension() + " Recordings");
-    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Stinger Recordings");
+    return controller.getAudioFolder();
 }
 
 void CueSettings::toggleRecording()
@@ -447,11 +444,12 @@ void CueSettings::toggleRecording()
         applyArm();
         if (file.existsAsFile() && controller.getShow().isValid (id))
         {
-            const auto oldName = controller.getShow().cue (id).name;
+            const auto before = controller.getShow().cue (id);
             controller.assignFile (id, file);
-            controller.getShow().cue (id).name = oldName.isNotEmpty() ? oldName
-                                                                     : "Recording " + juce::Time::getCurrentTime().formatted ("%H:%M");
+            controller.getShow().cue (id).name = before.name.isNotEmpty() ? before.name
+                                                                         : "Recording " + juce::Time::getCurrentTime().formatted ("%H:%M");
             controller.cueChanged (id);
+            waveform.recordedOver (id, before);   // Undo puts the old song back
         }
         refresh();
         return;
@@ -494,10 +492,7 @@ void CueSettings::startRecording()
 
 juce::File CueSettings::downloadFolder (const ShowController& c)
 {
-    const auto show = c.getShowFile();
-    if (show != juce::File())
-        return show.getParentDirectory().getChildFile (show.getFileNameWithoutExtension() + " Downloads");
-    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Stinger Downloads");
+    return c.getAudioFolder();
 }
 
 void CueSettings::pullOrCancel()

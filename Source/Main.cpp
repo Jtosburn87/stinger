@@ -161,6 +161,8 @@ private:
                 panel.showLinksTab (file.getFileName().containsIgnoreCase ("links"));
                 image = panel.createComponentSnapshot (panel.getLocalBounds());
             }
+            else if (file.getFileName().containsIgnoreCase ("credits"))   // *credits*: the credits window
+                image = MainComponent::creditsImage();
             else
                 image = app.snapshotContent->createComponentSnapshot (app.snapshotContent->getLocalBounds());
             file.deleteFile();

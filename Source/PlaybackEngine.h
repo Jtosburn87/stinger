@@ -33,9 +33,11 @@ struct PlayPlan
     bool loop = false;
     bool fadeOthers = false;
     PlaybackMode takeOver = PlaybackMode::overlap;   // one at a time / per output: stops the others (overlap = none)
-    bool takeOverPlaylist = true;   // false: playlist songs are left alone (GO fades those itself)
     int tag = 0;                   // playlist entry this was started for (0 = none)
-    CueFx* fx = nullptr;            // the button's plugins (null = none): played through its own bus
+    int playlist = 0;               // playlist (uid) it was started for, 0 = a button. Taking over leaves the
+                                    // songs of its own playlist alone (GO fades those itself)
+    bool preview = false;           // the waveform editor's transport (not the button being played)
+    CueFx* fx = nullptr;           // the button's plugins (null = none): played through its own bus
     juce::int64 entryFade = 0;      // extra fade in from where it starts (the incoming side of a crossfade)
 
     /** Builds a plan from a cue and its loaded audio. Returns false if nothing would play. */
@@ -109,6 +111,9 @@ public:
     void setVoiceLoop (int voice, bool loop);
     /** Two buttons swapped places: voices playing one carry on as the other. */
     void swapCues (int a, int b);
+    /** A button's plugins changed while it plays: its voices (and songs queued to follow as it) go
+        through these from now on (null = straight to the output). */
+    void setCueFx (int cueId, CueFx* fx);
 
     struct VoiceInfo
     {
@@ -118,6 +123,7 @@ public:
         bool looping = false;
         bool hasFollow = false;
         bool waiting = false;                  // the song is over: silent until the next one (a playlist wait)
+        bool preview = false;                  // the waveform editor's transport
         double waitLeft = 0.0;                 // seconds until the next song starts, while waiting
         juce::uint32 order = 0;                // higher = started later
     };
@@ -142,7 +148,7 @@ private:
     struct Command
     {
         enum Type { play, stopCue, stopVoice, stopAll, live, follow, cancelFollow, fadeTag, releaseLoop,
-                    seek, setLoop, swapCues } type = play;
+                    seek, setLoop, swapCues, setFx } type = play;
         bool fade = false;
         int id = -1;
         float gain = 1.0f, pan = 0.0f;
@@ -182,6 +188,7 @@ private:
         std::atomic<const CueFx*> fx { nullptr };
         std::atomic<juce::uint32> order { 0 };
         std::atomic<int> tag { 0 };
+        std::atomic<bool> preview { false };
         std::atomic<bool> hasFollow { false };
         std::atomic<bool> looping { false };
         std::atomic<juce::int64> followAt { 0 };

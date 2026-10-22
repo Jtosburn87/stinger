@@ -53,6 +53,7 @@ struct Cue
     juce::File file;
     int colour = 0;                         // index into the button palette
     juce::uint32 customColour = 0;          // ARGB of a colour picked by hand (0 = the palette colour)
+    bool spent = false;                     // Self Destruct: played, shown black until reset (colour kept)
 
     double trimIn = 0.0;                    // first second that plays
     double trimOut = -1.0;                  // last second that plays; < 0 = end of file

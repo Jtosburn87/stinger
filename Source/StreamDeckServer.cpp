@@ -286,7 +286,7 @@ juce::String StreamDeckServer::stateJson()
     int nextCue = -1;
     juce::String nextName;
     if (auto* p = controller.currentPlaylist(); p != nullptr)
-        if (const int n = controller.getNextEntry(); n >= 0 && n < (int) p->entries.size())
+        if (const int n = controller.getNextEntry (controller.getSelectedPlaylist()); n >= 0 && n < (int) p->entries.size())
         {
             nextCue = p->entries[(size_t) n].cueId;
             if (show.isValid (nextCue))
@@ -296,6 +296,7 @@ juce::String StreamDeckServer::stateJson()
     auto* root = new juce::DynamicObject();
     root->setProperty ("type", "state");
     root->setProperty ("bank", shownBank ? shownBank() : 0);
+    root->setProperty ("selfDestruct", show.selfDestruct);
     juce::Array<juce::var> banks;
     for (auto& b : show.banks)
         banks.add (b.name);
@@ -316,6 +317,8 @@ juce::String StreamDeckServer::stateJson()
             o->setProperty ("name", c.name);
             o->setProperty ("colour", colourOf ? colourOf (c) : juce::String ("#5aa9f0"));
             o->setProperty ("next", id == nextCue);
+            if (c.spent)
+                o->setProperty ("spent", true);   // Self Destruct: drawn black
             for (auto& v : voices)
                 if (v.cueId == id)
                 {
@@ -334,8 +337,24 @@ juce::String StreamDeckServer::stateJson()
 
     auto* go = new juce::DynamicObject();
     go->setProperty ("next", nextName);
-    go->setProperty ("looping", controller.isLoopingUntilGo());
+    go->setProperty ("looping", controller.isLoopingUntilGo (controller.getSelectedPlaylist()));
+    go->setProperty ("playlist", controller.getSelectedPlaylist());
     root->setProperty ("go", go);
+
+    // every playlist, for GO keys set to one playlist
+    juce::Array<juce::var> playlists;
+    for (int pl = 0; pl < (int) show.playlists.size(); ++pl)
+    {
+        auto* o = new juce::DynamicObject();
+        o->setProperty ("name", show.playlists[(size_t) pl].displayName (pl));
+        juce::String next;
+        if (const int n = controller.getNextEntry (pl); n >= 0 && show.isValid (show.playlists[(size_t) pl].entries[(size_t) n].cueId))
+            next = show.cue (show.playlists[(size_t) pl].entries[(size_t) n].cueId).name;
+        o->setProperty ("next", next);
+        o->setProperty ("looping", controller.isLoopingUntilGo (pl));
+        playlists.add (o);
+    }
+    root->setProperty ("playlists", playlists);
     root->setProperty ("anyPlaying", ! voices.empty());
 
     // the countdown key: the sting started last (one still playing on rather than fading out, if any)

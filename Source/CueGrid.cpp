@@ -119,10 +119,11 @@ void CueGrid::paintSlot (juce::Graphics& g, int slot)
     else
     {
         // the button's colour tints all of it; brighter while it plays
+        // (Self Destruct: a spent button is solid black)
         const auto colour = Look::colourOf (cue);
-        g.setColour (Look::shade (colour, playing ? 0.62f : 0.26f));
+        g.setColour (Look::shade (colour, cue.spent ? 1.0f : playing ? 0.62f : 0.26f));
         g.fillRoundedRectangle (r, 10.0f);
-        g.setColour (playing ? Look::text : editMode ? Look::amber.withAlpha (0.6f) : colour.withAlpha (0.45f));
+        g.setColour (playing ? Look::text : editMode ? Look::amber.withAlpha (0.6f) : cue.spent ? Look::edge : colour.withAlpha (0.45f));
         g.drawRoundedRectangle (r.reduced (playing ? 1.5f : 0.5f), 10.0f, playing ? 3.0f : 1.0f);
 
         // colour bar
@@ -159,7 +160,7 @@ void CueGrid::paintSlot (juce::Graphics& g, int slot)
         g.drawText (keyText, kr, juce::Justification::centred);
     }
 
-    const auto onFill = empty ? Look::text : Look::textOn (Look::shade (Look::colourOf (cue), playing ? 0.62f : 0.26f));
+    const auto onFill = empty ? Look::text : Look::textOn (Look::shade (Look::colourOf (cue), cue.spent ? 1.0f : playing ? 0.62f : 0.26f));
     auto audio = controller.getAudio (id);
     juce::String length;
     if (playing)
@@ -270,8 +271,19 @@ void CueGrid::showMenu (int id)
     colours.addItem (4, "Custom colour...", true, cue.customColour != 0);
     juce::PopupMenu m;
     m.addItem (1, empty ? "Choose file..." : "Replace file...");
-    m.addItem (3, "Add to playlist", ! empty);
+    // Add to playlist: straight in when there is one, else a submenu (ids 1000 + playlist)
+    auto& lists = controller.getShow().playlists;
+    if (lists.size() == 1)
+        m.addItem (1000, "Add to playlist", ! empty);
+    else
+    {
+        juce::PopupMenu add;
+        for (int pl = 0; pl < (int) lists.size(); ++pl)
+            add.addItem (1000 + pl, lists[(size_t) pl].displayName (pl));
+        m.addSubMenu ("Add to playlist", add, ! empty);
+    }
     m.addSubMenu ("Colour", colours);
+    m.addItem (5, "Reset colour (Self Destruct)", cue.spent);
     m.addSeparator();
     m.addItem (2, "Clear button", ! empty);
     juce::Component::SafePointer<CueGrid> safe (this);
@@ -284,8 +296,10 @@ void CueGrid::showMenu (int id)
             safe->chooseFile (id);
         else if (result == 2)
             c.clearCue (id);
-        else if (result == 3)
-            c.addToPlaylist (id);
+        else if (result >= 1000)
+            c.addToPlaylist (result - 1000, id);
+        else if (result == 5)
+            c.resetColour (id);
         else if (result == 4)
             Look::showColourPicker (safe->localAreaToGlobal (safe->slotBounds (Show::slotOf (id)).toNearestInt()), c, id);
         else if (result >= 100)

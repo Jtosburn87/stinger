@@ -26,6 +26,7 @@ void Show::reset()
     playlists.clear();
     playlists.push_back ({ "Playlist 1", {} });
     playbackMode = PlaybackMode::oneAtATime;
+    selfDestruct = false;
 }
 
 juce::var Show::toVar() const
@@ -34,6 +35,7 @@ juce::var Show::toVar() const
     root->setProperty ("format", "Stinger show");
     root->setProperty ("version", 1);
     root->setProperty ("playbackMode", (int) playbackMode);
+    root->setProperty ("selfDestruct", selfDestruct);
     juce::Array<juce::var> bankList;
     for (auto& b : banks)
     {
@@ -73,6 +75,7 @@ bool Show::fromVar (const juce::var& v)
     if (v.getProperty ("format", {}).toString() != "Stinger show")
         return false;
     playbackMode = (PlaybackMode) juce::jlimit (0, 2, (int) v.getProperty ("playbackMode", 0));
+    selfDestruct = (bool) v.getProperty ("selfDestruct", false);
     banks.clear();
     if (auto* list = v.getProperty ("banks", {}).getArray())
         for (auto& bv : *list)
@@ -173,6 +176,7 @@ bool Show::load (const juce::File& f, juce::String& error)
 ShowController::ShowController (PlaybackEngine& e) : engine (e)
 {
     loadedRate = engine.getSampleRate();
+    assignUids();
     startTimerHz (10);
 }
 
@@ -181,10 +185,66 @@ ShowController::~ShowController()
     stopTimer();
 }
 
-void ShowController::assignFile (int id, const juce::File& file)
+juce::File ShowController::showFileFor (const juce::String& name) const
+{
+    auto legal = juce::File::createLegalFileName (name.trim());
+    if (legal.isEmpty())
+        legal = "Show";
+    return homeFolder.getChildFile (legal).getChildFile (legal + ".stinger");
+}
+
+juce::File ShowController::getAudioFolder() const
+{
+    if (showFile != juce::File())
+        return showFile.getSiblingFile ("Audio");
+    return homeFolder.getChildFile ("Unsaved").getChildFile ("Audio");
+}
+
+juce::File ShowController::importFile (const juce::File& file)
+{
+    const auto folder = getAudioFolder();
+    if (! file.existsAsFile() || file.isAChildOf (folder))
+        return file;
+    auto target = folder.getChildFile (file.getFileName());
+    if (target.existsAsFile() && target.getSize() == file.getSize())
+        return target;   // copied before (the same file onto another button)
+    if (! folder.createDirectory())
+        return file;
+    if (target.exists())
+        target = target.getNonexistentSibling();
+    return file.copyFileTo (target) ? target : file;
+}
+
+void ShowController::moveUnsavedAudio (const juce::File& audioFolder)
+{
+    const auto unsaved = getAudioFolder();
+    std::map<juce::String, juce::File> moved;   // old path -> new (buttons can share a file)
+    for (int b = 0; b < (int) show.banks.size(); ++b)
+        for (int s = 0; s < Show::cuesPerBank; ++s)
+        {
+            const int id = Show::cueId (b, s);
+            auto& c = show.cue (id);
+            if (! c.file.isAChildOf (unsaved))
+                continue;
+            const auto key = c.file.getFullPathName();
+            if (moved.count (key) == 0)
+            {
+                auto target = audioFolder.getChildFile (c.file.getFileName());
+                if (target.exists())
+                    target = target.getNonexistentSibling();
+                moved[key] = audioFolder.createDirectory() && c.file.moveFileTo (target) ? target : c.file;
+            }
+            c.file = moved[key];
+            if (loading.count (id) > 0)
+                loadAudio (id);   // a load on its way was for the old place
+        }
+}
+
+void ShowController::assignFile (int id, const juce::File& original)
 {
     if (! show.isValid (id))
         return;
+    const auto file = importFile (original);
     auto& c = show.cue (id);
     if (c.file != file)
     {
@@ -199,7 +259,7 @@ void ShowController::assignFile (int id, const juce::File& file)
         c.customColour = keep.customColour;
         c.midi = keep.midi;
         c.file = file;
-        c.name = file.getFileNameWithoutExtension();
+        c.name = original.getFileNameWithoutExtension();
     }
     engine.stopCue (id, false);
     loadAudio (id);
@@ -224,6 +284,31 @@ void ShowController::clearCue (int id)
     retireFx (id);
     errors.erase (id);
     loading.erase (id);
+    dirty = true;
+    sendChangeMessage();
+}
+
+void ShowController::restoreCue (int id, const Cue& c)
+{
+    if (! show.isValid (id))
+        return;
+    engine.stopCue (id, false);
+    auto& cue = show.cue (id);
+    const auto plugins = cue.plugins;
+    const bool sameFile = cue.file == c.file;
+    cue = c;
+    cue.plugins = plugins;   // the running plugins belong to the button, not to the take
+    if (! sameFile)
+    {
+        if (auto it = media.find (id); it != media.end())
+        {
+            retire (it->second);
+            media.erase (it);
+        }
+        errors.erase (id);
+        loading.erase (id);
+        loadAudio (id);   // (nothing to load when the button goes back to empty)
+    }
     dirty = true;
     sendChangeMessage();
 }
@@ -422,6 +507,7 @@ bool ShowController::loadNow (int id, juce::String& error)
 void ShowController::reloadAll()
 {
     loadedRate = engine.getSampleRate();
+    assignUids();
     for (int b = 0; b < (int) show.banks.size(); ++b)
         for (int s = 0; s < Show::cuesPerBank; ++s)
             if (! show.cue (Show::cueId (b, s)).isEmpty())
@@ -432,6 +518,80 @@ void ShowController::retire (std::shared_ptr<CueAudio> audio)
 {
     if (audio != nullptr)
         retired.push_back (std::move (audio));
+}
+
+void ShowController::setSelfDestruct (bool on)
+{
+    if (on == show.selfDestruct)
+        return;
+    show.selfDestruct = on;
+    dirty = true;
+    sendChangeMessage();
+}
+
+void ShowController::updateSelfDestruct()
+{
+    std::set<int> playing;
+    for (auto& v : engine.getVoices())
+        if (! v.preview)
+            playing.insert (v.cueId);
+    if (show.selfDestruct)
+        destructing.insert (playing.begin(), playing.end());
+    bool changed = false;
+    for (auto it = destructing.begin(); it != destructing.end();)
+    {
+        if (playing.count (*it) > 0)
+        {
+            ++it;
+            continue;
+        }
+        if (show.isValid (*it) && ! show.cue (*it).isEmpty() && ! show.cue (*it).spent)
+        {
+            show.cue (*it).spent = true;   // played and stopped (or ended): black from now on
+            changed = true;
+        }
+        it = destructing.erase (it);
+    }
+    if (changed)
+    {
+        dirty = true;
+        sendChangeMessage();
+    }
+}
+
+void ShowController::resetColours()
+{
+    bool changed = false;
+    for (auto& b : show.banks)
+        for (auto& c : b.cues)
+            if (c.spent)
+            {
+                c.spent = false;
+                changed = true;
+            }
+    if (changed)
+    {
+        dirty = true;
+        sendChangeMessage();
+    }
+}
+
+void ShowController::resetColour (int id)
+{
+    if (! show.isValid (id) || ! show.cue (id).spent)
+        return;
+    show.cue (id).spent = false;
+    dirty = true;
+    sendChangeMessage();
+}
+
+bool ShowController::anySpent() const
+{
+    for (auto& b : show.banks)
+        for (auto& c : b.cues)
+            if (c.spent)
+                return true;
+    return false;
 }
 
 void ShowController::timerCallback()
@@ -447,6 +607,7 @@ void ShowController::timerCallback()
             chain->prepare (fxRate, fxBlock);   // new device rate / buffer size
     }
     updatePlaylist();
+    updateSelfDestruct();
 
     retired.erase (std::remove_if (retired.begin(), retired.end(),
                                    [this] (auto& a) { return ! engine.isUsing (a.get()); }),
@@ -475,11 +636,13 @@ void ShowController::newShow()
     loading.clear();
     show.reset();
     showFile = juce::File();
-    playlistIndex = 0;
-    nextUid = onAirUid = 0;
+    selectedPlaylist = 0;
+    assignUids();
     tagUid.clear();
+    tagPlaylist.clear();
     chained.clear();
     seen.clear();
+    destructing.clear();
     dirty = false;
     sendChangeMessage();
 }
@@ -496,9 +659,7 @@ bool ShowController::openShow (const juce::File& f, juce::String& error)
         for (int s = 0; s < Show::cuesPerBank; ++s)
             if (show.cue (Show::cueId (b, s)).hasPlugins())
                 createPlugins (Show::cueId (b, s));
-    for (auto& p : show.playlists)
-        for (auto& e : p.entries)
-            e.uid = newUid();
+    assignUids();
     showFile = f;
     reloadAll();
     dirty = false;
@@ -509,6 +670,13 @@ bool ShowController::openShow (const juce::File& f, juce::String& error)
 bool ShowController::saveShow (const juce::File& f, juce::String& error)
 {
     storePluginStates();
+    if (! f.getParentDirectory().createDirectory())
+    {
+        error = "Couldn't make the folder " + f.getParentDirectory().getFullPathName();
+        return false;
+    }
+    if (showFile == juce::File())
+        moveUnsavedAudio (f.getSiblingFile ("Audio"));
     if (! show.save (f, error))
         return false;
     showFile = f;

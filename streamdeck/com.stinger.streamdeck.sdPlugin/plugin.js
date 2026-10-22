@@ -10,6 +10,8 @@ let stinger = null;
 let state = null;              // last state from Stinger, null = not connected
 const keys = {};               // context -> { action, settings }
 const shown = {};              // context -> last image sent
+const inspectors = {};         // context -> action, while its settings panel is open
+let namesSent = '';            // the playlist / bank names the open panels last got
 
 // Called by the Stream Deck app when it loads the plugin.
 function connectElgatoStreamDeckSocket (port, pluginUUID, registerEvent) {
@@ -39,7 +41,40 @@ function fromStreamDeck (m) {
         case 'keyDown':
             press (m.context);
             break;
+        case 'propertyInspectorDidAppear':
+            inspectors[m.context] = m.action;
+            sendNames (m.context);
+            break;
+        case 'propertyInspectorDidDisappear':
+            delete inspectors[m.context];
+            break;
+        case 'sendToPlugin':   // a settings panel asking for the names
+            sendNames (m.context);
+            break;
     }
+}
+
+// The settings panels list playlists and banks by their names in Stinger (empty lists = not connected).
+function names () {
+    return {
+        playlists: state ? (state.playlists || []).map (p => p.name || '') : [],
+        banks: state ? (state.banks || []) : []
+    };
+}
+
+function sendNames (context) {
+    const action = inspectors[context] || (keys[context] && keys[context].action);
+    if (streamDeck && streamDeck.readyState === WebSocket.OPEN && action)
+        streamDeck.send (JSON.stringify ({ event: 'sendToPropertyInspector', action, context, payload: names() }));
+}
+
+function namesChanged () {
+    const now = JSON.stringify (names());
+    if (now === namesSent)
+        return;
+    namesSent = now;
+    for (const context in inspectors)
+        sendNames (context);
 }
 
 // ---- Stinger ----
@@ -56,11 +91,13 @@ function connectStinger () {
         if (m.type === 'state') {
             state = m;
             drawAll();
+            namesChanged();
         }
     };
     stinger.onclose = () => {
         state = null;
         drawAll();
+        namesChanged();
         setTimeout (connectStinger, 2000);
     };
     stinger.onerror = () => {};
@@ -79,10 +116,12 @@ function actionOf (context) {
                 return 'cue:' + (clamp (parseInt (s.bank || '0'), 0, 7) * 24 + position - 1);
             return 'slot' + position;
         }
-        case 'go':       return 'go';
+        case 'go':       return s.playlist && s.playlist !== 'selected' ? 'go' + (clamp (parseInt (s.playlist), 0, 7) + 1) : 'go';
         case 'fadenext': return 'fadeNext';
         case 'stopall':  return 'stopAll';
         case 'fadeall':  return 'fadeAll';
+        case 'selfdestruct':  return 'selfDestruct';
+        case 'resetcolours':  return 'resetColours';
         case 'bank':
             if (! s.bank || s.bank === 'next') return 'bankNext';
             if (s.bank === 'previous') return 'bankPrev';
@@ -133,8 +172,18 @@ function render (context) {
         case 'button':    return renderButton (k.settings, action);
         case 'countdown': return renderCountdown();
         case 'go': {
-            const sub = state.go.looping ? 'finishes loop' : (state.go.next || 'end of list');
-            return key ('#2f8f5b', '#2f8f5b', [ text ('GO', 72, 70, 44, '#ffffff', true), ...lines (sub, 72, 108, 15, '#e6f5ec', 2, 15) ]);
+            // the selected playlist, or the one picked in the key's settings
+            const lists = state.playlists || [];
+            const fixed = k.settings.playlist && k.settings.playlist !== 'selected';
+            const index = fixed ? clamp (parseInt (k.settings.playlist), 0, 7) : (state.go.playlist || 0);
+            const list = fixed ? lists[index] : { name: (lists[index] || {}).name, next: state.go.next, looping: state.go.looping };
+            if (! list)
+                return key ('#15181c', '#2c323a', [ text ('GO', 72, 70, 44, '#4a5260', true), text ('no playlist ' + (index + 1), 72, 104, 14, '#6e7885') ]);
+            const sub = list.looping ? 'finishes loop' : (list.next || 'end of list');
+            const parts = [ text ('GO', 72, 74, 44, '#ffffff', true), ...lines (sub, 72, 110, 15, '#e6f5ec', 2, 15) ];
+            if (list.name && (fixed || lists.length > 1))
+                parts.push (text (list.name.length > 14 ? list.name.substring (0, 13) + '…' : list.name, 72, 30, 15, '#cdeedb', true));
+            return key ('#2f8f5b', '#2f8f5b', parts);
         }
         case 'fadenext':
             return key ('#172636', '#3f6a95', [ text ('FADE TO', 72, 62, 22, '#a9d0f7', true), text ('NEXT', 72, 90, 22, '#a9d0f7', true) ]);
@@ -142,6 +191,17 @@ function render (context) {
             return key (state.anyPlaying ? '#c93a3f' : '#3a1c1e', '#c93a3f', [ text ('STOP', 72, 64, 28, '#ffffff', true), text ('ALL', 72, 96, 28, '#ffffff', true) ]);
         case 'fadeall':
             return key ('#262b32', state.anyPlaying ? '#f2a33a' : '#4a5260', [ text ('FADE', 72, 64, 26, '#e8eaed', true), text ('ALL', 72, 96, 26, '#e8eaed', true) ]);
+        case 'selfdestruct':
+            // lit red while the mode is on
+            return state.selfDestruct
+                ? key ('#8a1c1f', '#e5484d', [ text ('SELF', 72, 52, 24, '#ffffff', true), text ('DESTRUCT', 72, 80, 22, '#ffffff', true), text ('ON', 72, 116, 20, '#ffd1d2', true) ], 8)
+                : key ('#1e2228', '#4a5260', [ text ('SELF', 72, 52, 24, '#a7b0bb', true), text ('DESTRUCT', 72, 80, 22, '#a7b0bb', true), text ('OFF', 72, 116, 20, '#6e7885', true) ]);
+        case 'resetcolours': {
+            const spent = (state.cues || []).filter (c => c.spent).length;
+            return key (spent ? '#262b32' : '#15181c', spent ? '#c9d0d8' : '#2c323a',
+                        [ text ('RESET', 72, 60, 26, spent ? '#e8eaed' : '#4a5260', true), text ('COLOURS', 72, 90, 20, spent ? '#e8eaed' : '#4a5260', true),
+                          text (spent ? spent + ' black' : 'none black', 72, 118, 14, spent ? '#a7b0bb' : '#4a5260') ]);
+        }
         case 'bank': {
             const s = k.settings;
             if (! s.bank || s.bank === 'next' || s.bank === 'previous')
@@ -189,8 +249,8 @@ function renderButton (settings, action) {
         parts.push ('<rect x="12" y="116" width="' + Math.round (120 * Math.min (1, cue.progress || 0)) + '" height="10" rx="5" fill="' + fore + '"/>');
         return key (back, fore, parts, 8);
     }
-    // idle: a dark shade of the button's colour with its name
-    const back = shade (cue.colour, 0.42);
+    // idle: a dark shade of the button's colour with its name (Self Destruct: spent = solid black)
+    const back = cue.spent ? '#000000' : shade (cue.colour, 0.42);
     const fore = textOn (back);
     parts.push ('<rect x="0" y="0" width="144" height="14" fill="' + cue.colour + '"/>');
     parts.push (...lines (cue.name, 72, 54, 20, fore, 3, 22));
@@ -199,7 +259,7 @@ function renderButton (settings, action) {
         parts.push ('<rect x="84" y="118" width="52" height="20" rx="4" fill="#2f8f5b"/>');
         parts.push (text ('NEXT', 110, 133, 13, '#ffffff', true));
     }
-    return key (back, cue.next ? '#2f8f5b' : shade (cue.colour, 0.8), parts);
+    return key (back, cue.next ? '#2f8f5b' : cue.spent ? '#2c323a' : shade (cue.colour, 0.8), parts);
 }
 
 /** The sting started last, in its colour: name, time left (tenths in the last 10 s), progress. */
