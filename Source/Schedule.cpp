@@ -350,3 +350,11 @@ ShowController::Playing ShowController::newestVoice() const
             }
     return p;
 }
+
+juce::String ShowController::getRunName (int row) const
+{
+    if (row < 0 || row >= (int) show.run.size())
+        return {};
+    const auto& r = show.run[(size_t) row];
+    return r.person.isNotEmpty() ? r.person : show.isValid (r.cueId) ? show.cue (r.cueId).name : juce::String ("(note)");
+}

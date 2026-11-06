@@ -81,6 +81,11 @@ main { flex: 1; min-height: 0; display: flex; align-items: center; justify-conte
 .panel .buttons { display: flex; gap: 8px; margin-top: 4px; }
 .panel .buttons button { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid var(--line); background: #262b32; color: var(--text); font: inherit; font-weight: 600; font-size: 15px; }
 .panel .buttons button.primary { background: var(--amber); border-color: var(--amber); color: #1a1206; }
+#clockPage { position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: #000; z-index: 50; }
+#clockFace { position: absolute; top: 0; right: 0; bottom: 0; left: 0; }
+#clockBar { position: absolute; left: 0; right: 0; bottom: 0; display: flex; padding: 10px; background: rgba(21,24,28,0.92); }
+#clockBar select { flex: 1; min-width: 0; margin-right: 8px; font-size: 15px; }
+#clockBar button { background: #262b32; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 8px 14px; font-size: 15px; font-weight: 600; }
 .hidden { display: none !important; }
 
 /* Older Safari (iOS 12 to 14.4, e.g. an iPad Mini 2) has no gap in flex layouts: the same spacing with margins.
@@ -101,6 +106,7 @@ main { flex: 1; min-height: 0; display: flex; align-items: center; justify-conte
     <div class="dot" id="dot"></div>
     <div class="logo">STINGER</div>
     <div class="bank" id="bank">connecting…</div>
+    <button id="clockButton" title="A big clock: time left, or the countdown to the next cue">Clock</button>
     <button id="sizeButton" title="Switch between 24 keys (Stinger's buttons) and a 12-key layout">24 keys</button>
     <button id="editButton">Edit</button>
 </header>
@@ -111,6 +117,18 @@ main { flex: 1; min-height: 0; display: flex; align-items: center; justify-conte
 </main>
 <div id="editbar"><span>Tap a key to change it. Saved in Stinger.</span><button id="resetButton">Reset</button><button id="doneButton">Done</button></div>
 
+<div id="clockPage" class="hidden">
+    <div id="clockFace"></div>
+    <div id="clockBar" class="hidden">
+        <select id="clockMode">
+            <option value="timeName">Time left, song name, and the clock when nothing plays</option>
+            <option value="timeOnly">Time left only</option>
+            <option value="nextCue">Countdown to the next cue (schedule)</option>
+        </select>
+        <button id="clockClose">Close</button>
+    </div>
+</div>
+
 <div id="sheet">
     <div class="panel">
         <h2 id="sheetTitle">Key</h2>
@@ -118,6 +136,10 @@ main { flex: 1; min-height: 0; display: flex; align-items: center; justify-conte
             <select id="kind">
                 <option value="button">Button</option>
                 <option value="countdown">Countdown</option>
+                <option value="nextcue">Next cue countdown</option>
+                <option value="hold">Schedule: Hold</option>
+                <option value="schedgo">Schedule: GO NOW</option>
+                <option value="rungo">Run of show: GO</option>
                 <option value="go">GO</option>
                 <option value="fadenext">Fade to next</option>
                 <option value="stopall">Stop all</option>
@@ -141,6 +163,14 @@ main { flex: 1; min-height: 0; display: flex; align-items: center; justify-conte
             <label>Button <select id="position"></select></label>
         </div>
         <label id="goOptions">Playlist <select id="playlist"></select></label>
+        <label id="holdOptions">Hold for
+            <select id="holdMinutes">
+                <option value="1">1 minute</option>
+                <option value="2">2 minutes</option>
+                <option value="5">5 minutes</option>
+                <option value="10">10 minutes</option>
+            </select>
+        </label>
         <div id="goColour" class="row">
             <label>Key colour <input type="color" id="keyColour" value="#2f8f5b"></label>
             <button id="defaultColour" type="button" class="small">Default green</button>
@@ -265,11 +295,13 @@ function connect () {
         const m = JSON.parse (e.data);
         if (m.type === 'state') {
             state = m;
+            drawClock();
             drawAll();
         }
     };
     socket.onclose = () => {
         state = null;
+        drawClock();
         ++failures;
         drawAll();
         retry();
@@ -421,6 +453,7 @@ function openSheet (i) {
     const k = layout()[i];
     document.getElementById ('sheetTitle').textContent = 'Key ' + (i + 1);
     document.getElementById ('kind').value = k.kind;
+    document.getElementById ('holdMinutes').value = String (k.kind === 'hold' ? holdMinutes (k) : 5);
     document.getElementById ('mode').value = k.mode === 'fixed' ? 'fixed' : 'shown';
     fillSelect ('fixedBank', bankOptions(), k.bank || 0);
     fillSelect ('position', Array.from ({ length: 24 }, (_, n) => [String (n + 1), String (n + 1)]), k.position || 1);
@@ -447,6 +480,7 @@ function sheetVisibility () {
     document.getElementById ('buttonWhere').classList.toggle ('hidden', kind !== 'button');
     document.getElementById ('bankLabel').classList.toggle ('hidden', ! fixed);
     document.getElementById ('goOptions').classList.toggle ('hidden', kind !== 'go');
+    document.getElementById ('holdOptions').classList.toggle ('hidden', kind !== 'hold');
     document.getElementById ('goColour').classList.toggle ('hidden', kind !== 'go');
     document.getElementById ('bankOptions').classList.toggle ('hidden', kind !== 'bank');
     document.getElementById ('textOptions').classList.toggle ('hidden', kind === 'empty');
@@ -461,6 +495,8 @@ function sheetKey () {
         k.position = parseInt (document.getElementById ('position').value);
         if (k.mode === 'fixed')
             k.bank = parseInt (document.getElementById ('fixedBank').value);
+    } else if (kind === 'hold') {
+        k.minutes = parseInt (document.getElementById ('holdMinutes').value);
     } else if (kind === 'go') {
         k.playlist = document.getElementById ('playlist').value;
         const colour = document.getElementById ('keyColour').value;
@@ -532,6 +568,9 @@ function actionOf (k) {
         }
         case 'go':       return k.playlist && k.playlist !== 'selected' ? 'go' + (clamp (parseInt (k.playlist), 0, 7) + 1) : 'go';
         case 'fadenext': return 'fadeNext';
+        case 'hold':     return 'hold' + holdMinutes (k);
+        case 'schedgo':  return 'schedGo';
+        case 'rungo':    return 'runGo';
         case 'stopall':  return 'stopAll';
         case 'fadeall':  return 'fadeAll';
         case 'selfdestruct':  return 'selfDestruct';
@@ -586,6 +625,10 @@ function renderKind (kind, s, action, custom) {
                 parts.push (text (list.name.length > 11 ? list.name.substring (0, 10) + '…' : list.name, 78, 24, 14, fore, true, 'middle', 0.8));
             return key (back, back, parts);
         }
+        case 'nextcue':  return renderNextCue (custom);
+        case 'hold':     return renderHold (s, custom);
+        case 'schedgo':  return renderScheduleGo (custom);
+        case 'rungo':    return renderRunGo (custom);
         case 'fadenext':
             return key ('#172636', '#3f6a95', own ([ text ('FADE TO', 72, 62, 22, '#a9d0f7', true), text ('NEXT', 72, 90, 22, '#a9d0f7', true) ]));
         case 'stopall':
@@ -615,6 +658,59 @@ function renderKind (kind, s, action, custom) {
         }
     }
     return key ('#15181c', '#2c323a', []);
+}
+
+const URGENCY = { green: '#35d07f', yellow: '#ffd60a', red: '#ff3b3b' };
+
+/** m:ss, or h:mm:ss from an hour up. */
+function longTime (seconds) {
+    const s = Math.max (0, Math.ceil (seconds || 0));
+    const h = Math.floor (s / 3600), m = Math.floor (s / 60) % 60;
+    return (h > 0 ? h + ':' + String (m).padStart (2, '0') : String (m)) + ':' + String (s % 60).padStart (2, '0');
+}
+
+function holdMinutes (s) {
+    const m = parseInt (s && s.minutes);
+    return m === 1 || m === 2 || m === 5 || m === 10 ? m : 5;
+}
+
+/** The countdown to the next scheduled trigger: green, yellow from 1 minute, red from 10 seconds. */
+function renderNextCue (custom) {
+    const sched = state.schedule;
+    if (! sched || ! sched.next)
+        return key ('#0e1013', '#2c323a', [ ...(custom ? customText (custom) : [ text ('NEXT CUE', 72, 40, 17, '#6e7885', true) ]),
+                                            text ('--:--', 72, 84, 34, '#4a5260', true),
+                                            text (sched && sched.running ? 'no more cues' : 'not started', 72, 112, 14, '#4a5260') ]);
+    const n = sched.next;
+    const back = URGENCY[n.urgency] || URGENCY.green;
+    const fore = textOn (back);
+    const parts = [ ...(custom ? customText (custom) : lines (n.name, 72, 34, 16, fore, 2, 16)),
+                    text (longTime (n.remaining), 72, 94, n.remaining >= 3600 ? 30 : 40, fore, true) ];
+    if (n.held)
+        parts.push (text ('HOLD +' + longTime (n.heldSeconds), 72, 122, 15, fore, true));
+    return key (back, fore, parts, 8);
+}
+
+function renderHold (s, custom) {
+    const on = !! (state.schedule && state.schedule.next);
+    const main = on ? '#ffd60a' : '#4a5260';
+    return key (on ? '#2a2418' : '#15181c', main, custom ? customText (custom)
+                                                         : [ text ('HOLD', 72, 58, 24, main, true), text ('+' + holdMinutes (s), 72, 106, 46, main, true) ]);
+}
+
+function renderScheduleGo (custom) {
+    const n = state.schedule && state.schedule.next;
+    const back = n ? '#2f8f5b' : '#15181c', fore = n ? '#ffffff' : '#4a5260';
+    return key (back, n ? back : '#2c323a', [ ...(custom ? customText (custom) : [ text ('GO NOW', 72, 66, 28, fore, true) ]),
+                                              ...lines (n ? n.name : 'no trigger', 72, 100, 15, fore, 2, 15) ]);
+}
+
+function renderRunGo (custom) {
+    const run = state.run;
+    const has = !! (run && run.hasNext);
+    const back = has ? '#2f8f5b' : '#15181c', fore = has ? '#ffffff' : '#4a5260';
+    return key (back, has ? back : '#2c323a', [ ...(custom ? customText (custom) : [ text ('RUN', 72, 44, 18, fore, true), text ('GO', 72, 82, 38, fore, true) ]),
+                                                ...lines (has ? run.next : 'end of the run', 72, 112, 15, fore, 2, 15) ]);
 }
 
 function renderButton (action, custom) {
@@ -831,6 +927,91 @@ function bankLetter (b) { return String.fromCharCode (65 + b); }
 
 function clamp (v, lo, hi) { return isNaN (v) ? lo : Math.max (lo, Math.min (hi, v)); }
 
+// ---- the big clock page (same choices as the countdown window on a monitor) ----
+
+let clockOpen = false;
+let clockMode = load ('stingerClockMode') || 'timeName';
+let clockBarTimer = 0;
+
+function showClockBar () {
+    document.getElementById ('clockBar').classList.remove ('hidden');
+    clearTimeout (clockBarTimer);
+    clockBarTimer = setTimeout (() => document.getElementById ('clockBar').classList.add ('hidden'), 5000);
+}
+
+function setClockOpen (open) {
+    clockOpen = open;
+    document.getElementById ('clockPage').classList.toggle ('hidden', ! open);
+    if (open) {
+        document.getElementById ('clockMode').value = clockMode;
+        showClockBar();
+        drawClock();
+    }
+}
+
+function wallClock () {
+    const d = new Date();
+    const two = (n) => String (n).padStart (2, '0');
+    return two (d.getHours()) + ':' + two (d.getMinutes()) + ':' + two (d.getSeconds());
+}
+
+function drawClock () {
+    if (! clockOpen)
+        return;
+    const W = Math.max (100, innerWidth), H = Math.max (100, innerHeight);
+    const grey = '#555555', white = '#ffffff';
+    const captionSize = Math.min (H * 0.11, W * 0.075);
+    const parts = [];
+    const caption = (s, y, colour) => parts.push (text (s.length > 44 ? s.substring (0, 43) + '…' : s, W / 2, y, Math.min (captionSize, W * 1.5 / Math.max (8, s.length)), colour, true));
+    const big = (s, colour, height) => {
+        const size = Math.min (height * 0.9, W * 0.94 / (Math.max (4, s.length) * 0.56));
+        parts.push (text (s, W / 2, H / 2 + size * 0.35, size, colour, true));
+    };
+    if (! state) {
+        big ('--:--', grey, H * 0.5);
+        caption ('Not connected', H * 0.9, grey);
+    } else if (clockMode === 'nextCue') {
+        const sched = state.schedule, n = sched && sched.next;
+        if (! n) {
+            big ('--:--', grey, H * 0.5);
+            caption (sched && sched.running ? 'No more cues' : 'Schedule not started', H * 0.9, '#777777');
+        } else {
+            big (longTime (n.remaining), URGENCY[n.urgency] || URGENCY.green, H * 0.62);
+            caption (n.name, H * 0.92, white);
+            if (n.held)
+                caption ('HOLD +' + longTime (n.heldSeconds), H * 0.12, URGENCY.yellow);
+        }
+    } else {
+        const now = state.now;
+        const left = now ? (now.waitLeft !== undefined ? now.waitLeft : now.remaining) : 0;
+        const colour = ! now ? white : now.looping ? '#5aa9f0' : left <= 10 ? URGENCY.red : white;
+        const shownTime = now ? (now.looping ? 'LOOP' : longTime (left)) : '';
+        if (clockMode === 'timeOnly') {
+            if (now) big (shownTime, colour, H * 0.8);
+            else     big ('--:--', grey, H * 0.5);
+        } else if (now) {
+            big (shownTime, colour, H * 0.62);
+            caption (now.waitLeft !== undefined ? (now.nextName || 'next song') : now.name, H * 0.92, white);
+        } else
+            big (wallClock(), white, H * 0.5);
+    }
+    document.getElementById ('clockFace').innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '">' + parts.join ('') + '</svg>';
+}
+
+setInterval (drawClock, 500);   // the time of day, while nothing else changes
+addEventListener ('resize', drawClock);
+document.getElementById ('clockButton').addEventListener ('click', () => setClockOpen (true));
+document.getElementById ('clockClose').addEventListener ('click', () => setClockOpen (false));
+document.getElementById ('clockMode').addEventListener ('change', (e) => {
+    clockMode = e.target.value;
+    save ('stingerClockMode', clockMode);
+    drawClock();
+    showClockBar();
+});
+document.getElementById ('clockFace').addEventListener ('click', showClockBar);
+if (location.hash === '#clock')     // a link straight to the clock, e.g. for a stage manager's tablet
+    setTimeout (() => setClockOpen (true), 0);
+
 // ---- demo (a fake Stinger, for trying the page without one) ----
 
 function startDemo () {
@@ -840,6 +1021,8 @@ function startDemo () {
     state = { type: 'state', bank: 0, banks: [ 'Ceremony', 'Breaks', 'Spare' ], selfDestruct: false, anyPlaying: false,
               cues: names.map ((n, i) => ({ id: i, bank: 0, slot: i, name: n, colour: colours[i], length: 20 + i * 7 })),
               go: { next: 'Intro bed', looping: false, playlist: 0 }, playlists: [ { name: 'Walk-ins', next: 'Intro bed', looping: false } ],
+              schedule: { running: true, missed: 0, next: { name: 'Doors open', remaining: 95, urgency: 'green', held: true, heldSeconds: 300 } },
+              run: { hasNext: true, next: 'Dr. Lee', onAir: 'Host' },
               layouts: {} };
     state.cues[6].next = true;
     setInterval (demoTick, 100);

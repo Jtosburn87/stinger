@@ -1,4 +1,4 @@
-# Builds a Release, runs the tests, and copies Stinger.exe into dist\Stinger-<version>\ (the copy to run;
+﻿# Builds a Release, runs the tests, and copies Stinger.exe into dist\Stinger-<version>\ (the copy to run;
 # build\ stays free for the next build), with the Stream Deck plugin installer next to it.
 # Usage:  powershell -ExecutionPolicy Bypass -File release.ps1
 $ErrorActionPreference = "Stop"
@@ -16,9 +16,11 @@ New-Item -ItemType Directory -Force $stage | Out-Null
 # (Built by hand: Compress-Archive in Windows PowerShell writes backslashes into the paths.)
 Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
 $plugin = Get-Item "streamdeck\com.stinger.streamdeck.sdPlugin"
-# the plugin's version follows Stinger's, so Stream Deck sees each release as an update
+# the plugin's version follows Stinger's, so Stream Deck sees each release as an update. Raise $pluginBuild when the
+# plugin changes between versions of Stinger: Stream Deck ignores a plugin whose version it already has.
+$pluginBuild = 1
 $manifest = Join-Path $plugin.FullName "manifest.json"
-$numeric = (Select-String -Path CMakeLists.txt -Pattern 'project\(Stinger VERSION ([0-9.]+)').Matches[0].Groups[1].Value + ".0"
+$numeric = (Select-String -Path CMakeLists.txt -Pattern 'project\(Stinger VERSION ([0-9.]+)').Matches[0].Groups[1].Value + ".$pluginBuild"
 $json = [System.IO.File]::ReadAllText($manifest)
 $updated = [regex]::Replace($json, '"Version": "[0-9.]+"', '"Version": "' + $numeric + '"')
 if ($updated -ne $json) { [System.IO.File]::WriteAllText($manifest, $updated, (New-Object System.Text.UTF8Encoding $false)) }

@@ -310,6 +310,8 @@ public:
     void setRunRow (int index, const RunRow& row);
     int getRunNext() const { return runIndexOf (runNextUid); }
     int getRunOnAir() const { return runIndexOf (runOnAirUid); }
+    /** What a row is called on a key: the person, else its button, else "(note)". Empty for no row. */
+    juce::String getRunName (int row) const;
     void setRunNext (int index);
     /** Plays the next row's button (a note just moves on) and moves Next down one. */
     void runGo();

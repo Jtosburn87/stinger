@@ -127,6 +127,9 @@ function actionOf (context) {
         }
         case 'go':       return s.playlist && s.playlist !== 'selected' ? 'go' + (clamp (parseInt (s.playlist), 0, 7) + 1) : 'go';
         case 'fadenext': return 'fadeNext';
+        case 'hold':     return 'hold' + holdMinutes (s);
+        case 'schedgo':  return 'schedGo';
+        case 'rungo':    return 'runGo';
         case 'stopall':  return 'stopAll';
         case 'fadeall':  return 'fadeAll';
         case 'selfdestruct':  return 'selfDestruct';
@@ -140,7 +143,7 @@ function actionOf (context) {
 }
 
 function press (context) {
-    if (keys[context] && keys[context].action === PREFIX + 'countdown')
+    if (keys[context] && (keys[context].action === PREFIX + 'countdown' || keys[context].action === PREFIX + 'nextcue'))
         return;   // display only
     const action = actionOf (context);
     if (! action || ! stinger || stinger.readyState !== WebSocket.OPEN) {
@@ -215,6 +218,10 @@ function renderKind (kind, s, action, custom) {
                 parts.push (text (list.name.length > 11 ? list.name.substring (0, 10) + '…' : list.name, 78, 24, 14, fore, true, 'middle', 0.8));
             return key (back, back, parts);
         }
+        case 'nextcue':  return renderNextCue (custom);
+        case 'hold':     return renderHold (s, custom);
+        case 'schedgo':  return renderScheduleGo (custom);
+        case 'rungo':    return renderRunGo (custom);
         case 'fadenext':
             return key ('#172636', '#3f6a95', own ([ text ('FADE TO', 72, 62, 22, '#a9d0f7', true), text ('NEXT', 72, 90, 22, '#a9d0f7', true) ]));
         case 'stopall':
@@ -244,6 +251,59 @@ function renderKind (kind, s, action, custom) {
         }
     }
     return key ('#15181c', '#2c323a', []);
+}
+
+const URGENCY = { green: '#35d07f', yellow: '#ffd60a', red: '#ff3b3b' };
+
+/** m:ss, or h:mm:ss from an hour up. */
+function longTime (seconds) {
+    const s = Math.max (0, Math.ceil (seconds || 0));
+    const h = Math.floor (s / 3600), m = Math.floor (s / 60) % 60;
+    return (h > 0 ? h + ':' + String (m).padStart (2, '0') : String (m)) + ':' + String (s % 60).padStart (2, '0');
+}
+
+function holdMinutes (s) {
+    const m = parseInt (s && s.minutes);
+    return m === 1 || m === 2 || m === 5 || m === 10 ? m : 5;
+}
+
+/** The countdown to the next scheduled trigger: green, yellow from 1 minute, red from 10 seconds. */
+function renderNextCue (custom) {
+    const sched = state.schedule;
+    if (! sched || ! sched.next)
+        return key ('#0e1013', '#2c323a', [ ...(custom ? customText (custom) : [ text ('NEXT CUE', 72, 40, 17, '#6e7885', true) ]),
+                                            text ('--:--', 72, 84, 34, '#4a5260', true),
+                                            text (sched && sched.running ? 'no more cues' : 'not started', 72, 112, 14, '#4a5260') ]);
+    const n = sched.next;
+    const back = URGENCY[n.urgency] || URGENCY.green;
+    const fore = textOn (back);
+    const parts = [ ...(custom ? customText (custom) : lines (n.name, 72, 34, 16, fore, 2, 16)),
+                    text (longTime (n.remaining), 72, 94, n.remaining >= 3600 ? 30 : 40, fore, true) ];
+    if (n.held)
+        parts.push (text ('HOLD +' + longTime (n.heldSeconds), 72, 122, 15, fore, true));
+    return key (back, fore, parts, 8);
+}
+
+function renderHold (s, custom) {
+    const on = !! (state.schedule && state.schedule.next);
+    const main = on ? '#ffd60a' : '#4a5260';
+    return key (on ? '#2a2418' : '#15181c', main, custom ? customText (custom)
+                                                         : [ text ('HOLD', 72, 58, 24, main, true), text ('+' + holdMinutes (s), 72, 106, 46, main, true) ]);
+}
+
+function renderScheduleGo (custom) {
+    const n = state.schedule && state.schedule.next;
+    const back = n ? '#2f8f5b' : '#15181c', fore = n ? '#ffffff' : '#4a5260';
+    return key (back, n ? back : '#2c323a', [ ...(custom ? customText (custom) : [ text ('GO NOW', 72, 66, 28, fore, true) ]),
+                                              ...lines (n ? n.name : 'no trigger', 72, 100, 15, fore, 2, 15) ]);
+}
+
+function renderRunGo (custom) {
+    const run = state.run;
+    const has = !! (run && run.hasNext);
+    const back = has ? '#2f8f5b' : '#15181c', fore = has ? '#ffffff' : '#4a5260';
+    return key (back, has ? back : '#2c323a', [ ...(custom ? customText (custom) : [ text ('RUN', 72, 44, 18, fore, true), text ('GO', 72, 82, 38, fore, true) ]),
+                                                ...lines (has ? run.next : 'end of the run', 72, 112, 15, fore, 2, 15) ]);
 }
 
 function renderButton (action, custom) {

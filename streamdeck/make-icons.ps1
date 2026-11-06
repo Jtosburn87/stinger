@@ -75,6 +75,11 @@ Action-Icon "selfdestruct" { param($g, $s) $g.FillEllipse((New-Object System.Dra
 Action-Icon "resetcolours" { param($g, $s) $pen = New-Object System.Drawing.Pen $light, ($s / 12); $g.DrawArc($pen, $s * 0.16, $s * 0.16, $s * 0.68, $s * 0.68, 60, 290); $g.DrawLine($pen, $s * 0.72, $s * 0.12, $s * 0.76, $s * 0.32); $g.DrawLine($pen, $s * 0.76, $s * 0.32, $s * 0.56, $s * 0.34) }
 Action-Icon "countdown" { param($g, $s) $pen = New-Object System.Drawing.Pen $light, ($s / 12); $g.DrawEllipse($pen, $s * 0.12, $s * 0.12, $s * 0.76, $s * 0.76); $g.DrawLine($pen, $s * 0.5, $s * 0.5, $s * 0.5, $s * 0.24); $g.DrawLine($pen, $s * 0.5, $s * 0.5, $s * 0.7, $s * 0.6) }
 
+Action-Icon "nextcue"  { param($g, $s) $pen = New-Object System.Drawing.Pen $light, ($s / 12); $g.DrawEllipse($pen, $s * 0.12, $s * 0.12, $s * 0.76, $s * 0.76); $g.FillPie((New-Object System.Drawing.SolidBrush $light), $s * 0.24, $s * 0.24, $s * 0.52, $s * 0.52, 270, 100) }
+Action-Icon "hold"     { param($g, $s) $b = New-Object System.Drawing.SolidBrush $light; $g.FillRectangle($b, $s * 0.24, $s * 0.18, $s * 0.18, $s * 0.64); $g.FillRectangle($b, $s * 0.58, $s * 0.18, $s * 0.18, $s * 0.64) }
+Action-Icon "schedgo"  { param($g, $s) $tri = @((0.22, 0.14), (0.86, 0.5), (0.22, 0.86)) | ForEach-Object { New-Object System.Drawing.PointF ($_[0] * $s), ($_[1] * $s) }; $g.FillPolygon((New-Object System.Drawing.SolidBrush $light), [System.Drawing.PointF[]]$tri) }
+Action-Icon "rungo"    { param($g, $s) Glyph-Text $g $s "R" 0.7 }
+
 # default key images (72 / 144), shown until the plugin draws the key
 function Key-Image ([string]$name, $back, [string]$label) {
     foreach ($size in 72, 144) {
@@ -87,6 +92,10 @@ function Key-Image ([string]$name, $back, [string]$label) {
     }
 }
 Key-Image "button"   ([System.Drawing.Color]::FromArgb(30, 34, 40))   "STINGER"
+Key-Image "nextcue"  ([System.Drawing.Color]::FromArgb(14, 16, 19))   "--:--"
+Key-Image "hold"     ([System.Drawing.Color]::FromArgb(42, 36, 24))   "HOLD"
+Key-Image "schedgo"  ([System.Drawing.Color]::FromArgb(47, 143, 91))  "GO`nNOW"
+Key-Image "rungo"    ([System.Drawing.Color]::FromArgb(47, 143, 91))  "RUN`nGO"
 Key-Image "go"       ([System.Drawing.Color]::FromArgb(47, 143, 91))  "GO"
 Key-Image "fadenext" ([System.Drawing.Color]::FromArgb(23, 38, 54))   "FADE`nNEXT"
 Key-Image "stopall"  ([System.Drawing.Color]::FromArgb(201, 58, 63))  "STOP`nALL"

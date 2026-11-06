@@ -145,15 +145,8 @@ void OscBridge::sendChanges()
     const int nextCue = list != nullptr && next >= 0 && next < (int) list->entries.size() ? list->entries[(size_t) next].cueId : -1;
     sendText ("/stinger/next/name", show.isValid (nextCue) ? show.cue (nextCue).name : juce::String (" "));
 
-    auto runText = [&show] (int row)
-    {
-        if (row < 0 || row >= (int) show.run.size())
-            return juce::String (" ");
-        const auto& r = show.run[(size_t) row];
-        return r.person.isNotEmpty() ? r.person : show.isValid (r.cueId) ? show.cue (r.cueId).name : juce::String ("(note)");
-    };
-    sendText ("/stinger/run/next", runText (controller.getRunNext()));
-    sendText ("/stinger/run/onair", runText (controller.getRunOnAir()));
+    sendText ("/stinger/run/next", controller.getRunName (controller.getRunNext()) + " ");
+    sendText ("/stinger/run/onair", controller.getRunName (controller.getRunOnAir()) + " ");
 
     const int scheduled = controller.getNextScheduled();
     sendText ("/stinger/schedule/name", scheduled >= 0 ? controller.getScheduleName (scheduled) : juce::String (" "));

@@ -4,7 +4,7 @@
   "Name": "Stinger",
   "Author": "LEFTNoiseAudio",
   "Description": "Play Stinger's buttons and playlist from Stream Deck: keys show each button's name and colour, light up while it plays and count down.",
-  "Version": "0.3.2.0",
+  "Version": "0.3.2.1",
   "SDKVersion": 2,
   "CodePath": "plugin.html",
   "Icon": "images/plugin",
@@ -90,6 +90,39 @@
       "Icon": "images/action-resetcolours",
       "Controllers": ["Keypad"],
       "States": [{ "Image": "images/key-resetcolours", "ShowTitle": false }]
+    }
+    ,{
+      "UUID": "com.stinger.streamdeck.nextcue",
+      "Name": "Next cue countdown",
+      "Tooltip": "Shows the countdown to the next scheduled trigger: green, yellow at 1 minute, red at 10 seconds",
+      "Icon": "images/action-nextcue",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "images/key-nextcue", "ShowTitle": false }]
+    },
+    {
+      "UUID": "com.stinger.streamdeck.hold",
+      "Name": "Schedule hold",
+      "Tooltip": "Pushes the next scheduled trigger back 1, 2, 5 or 10 minutes (a GO during a hold defeats the countdown)",
+      "Icon": "images/action-hold",
+      "PropertyInspectorPath": "pi.html",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "images/key-hold", "ShowTitle": false }]
+    },
+    {
+      "UUID": "com.stinger.streamdeck.schedgo",
+      "Name": "Schedule GO NOW",
+      "Tooltip": "Fires the next scheduled trigger now",
+      "Icon": "images/action-schedgo",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "images/key-schedgo", "ShowTitle": false }]
+    },
+    {
+      "UUID": "com.stinger.streamdeck.rungo",
+      "Name": "Run of show GO",
+      "Tooltip": "Plays the run of show's Next row and moves on",
+      "Icon": "images/action-rungo",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "images/key-rungo", "ShowTitle": false }]
     }
   ]
 }

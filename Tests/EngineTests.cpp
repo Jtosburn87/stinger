@@ -1323,6 +1323,50 @@ static void testBackupLink()
     root.deleteRecursively();
 }
 
+static void testScheduleOnRemotes()
+{
+    std::puts ("Schedule on the phone and Stream Deck");
+    auto e = std::make_unique<PlaybackEngine>();
+    e->prepareForTest (rate, 2);
+    ShowController sc (*e);
+    juce::int64 now = juce::Time (2026, 10, 6, 19, 0, 0, 0, true).toMilliseconds();
+    sc.clockForTest = [&now] { return now; };
+    auto& show = sc.getShow();
+    show.cue (0) = monoOut (0);
+    show.cue (0).name = "Walk-in";
+    show.cue (0).file = juce::File::getCurrentWorkingDirectory().getChildFile ("x.wav");
+    StreamDeckServer server (sc, 52904);
+    auto state = [&server] { return juce::JSON::parse (server.stateJson()); };
+
+    auto s = state();
+    check (! (bool) s["schedule"]["running"] && s["schedule"]["next"].isVoid(), "nothing scheduled: no next cue");
+    check (! (bool) s["run"]["hasNext"], "an empty run of show");
+
+    ScheduleItem item;
+    item.cueId = 0;
+    item.kind = ScheduleItem::delay;
+    item.delaySeconds = 120.0;
+    sc.addScheduleItem (item);
+    sc.startSchedule();
+    s = state();
+    check ((bool) s["schedule"]["running"] && s["schedule"]["next"]["name"] == "Walk-in", "the next cue's name");
+    check ((int) s["schedule"]["next"]["remaining"] == 120 && s["schedule"]["next"]["urgency"] == "green", "its time and colour");
+    now += 70000;
+    check (state()["schedule"]["next"]["urgency"] == "yellow", "yellow at 1 minute");
+    now += 45000;
+    check (state()["schedule"]["next"]["urgency"] == "red", "red at 10 seconds");
+    sc.holdSchedule (5);
+    s = state();
+    check ((bool) s["schedule"]["next"]["held"] && (int) s["schedule"]["next"]["heldSeconds"] == 300 && s["schedule"]["next"]["urgency"] == "green", "a hold shows");
+
+    sc.addRunRow ({ -1, {}, "Dr. Lee", {} });
+    sc.addRunRow ({ 0, {}, {}, {} });
+    s = state();
+    check ((bool) s["run"]["hasNext"] && s["run"]["next"] == "Dr. Lee", "the run of show's next row, by person");
+    sc.setRunNext (1);
+    check (state()["run"]["next"] == "Walk-in", "or by song if no person is named");
+}
+
 static void testAutosave()
 {
     std::puts ("Autosave and crash recovery");
@@ -2406,6 +2450,13 @@ static int remoteServe (const juce::String& pageFile, int seconds)
     server.colourOf = [] (const Cue& c) { return c.colour == 0 ? juce::String ("#e5484d") : c.colour == 1 ? juce::String ("#f2a33a") : juce::String ("#3ccf7a"); };
     server.perform = [&sc] (const juce::String& a) { std::printf ("press %s\n", a.toRawUTF8()); std::fflush (stdout); if (a.startsWith ("slot")) sc.play (a.substring (4).getIntValue() - 1); };
     server.onMessage = [] (const juce::var& m) { std::printf ("message %s\n", juce::JSON::toString (m, true).toRawUTF8()); std::fflush (stdout); };
+    ScheduleItem item;
+    item.cueId = 2;
+    item.kind = ScheduleItem::delay;
+    item.delaySeconds = 55.0;
+    sc.addScheduleItem (item);
+    sc.startSchedule();
+    sc.addRunRow ({ -1, {}, "Dr. Lee", {} });
     sc.play (1);
     Outputs out (2);
     const auto end = juce::Time::getMillisecondCounter() + (juce::uint32) (seconds * 1000);
@@ -2555,6 +2606,7 @@ int main (int argc, char** argv)
     testRunOfShow();
     testSchedule();
     testOsc();
+    testScheduleOnRemotes();
     testBackupLink();
     testSelfDestruct();
     testPlaylists();

@@ -33,7 +33,7 @@ namespace
     /** Only the fields the page uses, so a phone can't fill the settings with junk. */
     juce::var cleanKey (const juce::var& k)
     {
-        static const juce::StringArray kinds { "button", "countdown", "go", "fadenext", "stopall", "fadeall",
+        static const juce::StringArray kinds { "button", "countdown", "nextcue", "hold", "schedgo", "rungo", "go", "fadenext", "stopall", "fadeall",
                                                "bank", "selfdestruct", "resetcolours", "empty" };
         const auto kind = k.getProperty ("kind", {}).toString();
         auto* o = new juce::DynamicObject();
@@ -43,6 +43,11 @@ namespace
             o->setProperty ("mode", k.getProperty ("mode", {}).toString() == "fixed" ? "fixed" : "shown");
             o->setProperty ("position", juce::jlimit (1, Show::cuesPerBank, (int) k.getProperty ("position", 1)));
             o->setProperty ("bank", juce::jlimit (0, 7, (int) k.getProperty ("bank", 0)));
+        }
+        else if (kind == "hold")
+        {
+            const int minutes = (int) k.getProperty ("minutes", 5);
+            o->setProperty ("minutes", minutes == 1 || minutes == 2 || minutes == 10 ? minutes : 5);
         }
         else if (kind == "go" || kind == "bank")
         {

@@ -43,6 +43,14 @@
     </div>
   </div>
 
+  <div id="holdAction" class="hidden">
+    <div class="row">
+      <label for="holdMinutes">Hold for</label>
+      <select id="holdMinutes"></select>
+    </div>
+    <p class="hint">Pushes the next scheduled trigger back. A GO during a hold defeats the countdown.</p>
+  </div>
+
   <div id="goAction" class="hidden">
     <div class="row">
       <label for="playlist">Plays</label>
@@ -77,7 +85,7 @@
       if (m.event === 'sendToPropertyInspector' && m.payload)
         showNames (m.payload.playlists || [], m.payload.banks || []);
     };
-    setup (action.action.endsWith ('.bank') ? 'bankAction' : action.action.endsWith ('.go') ? 'goAction' : 'button');
+    setup (action.action.endsWith ('.bank') ? 'bankAction' : action.action.endsWith ('.go') ? 'goAction' : action.action.endsWith ('.hold') ? 'holdAction' : 'button');
   }
 
   function save () {
@@ -137,6 +145,13 @@
       document.getElementById ('bankRow').classList.toggle ('hidden', mode.value !== 'fixed');
       if (! settings.position)
         update();
+    } else if (which === 'holdAction') {
+      const minutes = document.getElementById ('holdMinutes');
+      fill (minutes, [['1', '1 minute'], ['2', '2 minutes'], ['5', '5 minutes'], ['10', '10 minutes']]);
+      minutes.value = settings.minutes || '5';
+      minutes.onchange = () => { settings = Object.assign ({}, settings, { minutes: minutes.value }); save(); };
+      if (! settings.minutes)
+        minutes.onchange();
     } else if (which === 'goAction') {
       const playlist = document.getElementById ('playlist');
       fill (playlist, [['selected', 'Selected playlist'], ...Array.from ({ length: 8 }, (_, p) => [String (p), 'Playlist ' + (p + 1)])]);

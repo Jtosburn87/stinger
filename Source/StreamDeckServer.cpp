@@ -389,6 +389,32 @@ juce::String StreamDeckServer::stateJson()
     root->setProperty ("playlists", playlists);
     root->setProperty ("anyPlaying", ! voices.empty());
 
+    // the schedule's countdown and the run of show
+    {
+        auto* schedule = new juce::DynamicObject();
+        schedule->setProperty ("running", controller.isScheduleRunning());
+        schedule->setProperty ("missed", controller.getMissedCount());
+        if (const int next = controller.getNextScheduled(); next >= 0)
+        {
+            const auto urgency = controller.getScheduleUrgency();
+            const auto& item = show.schedule[(size_t) next];
+            auto* o = new juce::DynamicObject();
+            o->setProperty ("name", controller.getScheduleName (next));
+            o->setProperty ("remaining", (int) std::ceil (controller.getScheduleRemaining()));
+            o->setProperty ("urgency", urgency == ShowController::Urgency::red ? "red" : urgency == ShowController::Urgency::yellow ? "yellow" : "green");
+            o->setProperty ("held", item.held);
+            o->setProperty ("heldSeconds", item.heldSeconds);
+            schedule->setProperty ("next", o);
+        }
+        root->setProperty ("schedule", schedule);
+
+        auto* run = new juce::DynamicObject();
+        run->setProperty ("hasNext", controller.getRunNext() >= 0);
+        run->setProperty ("next", controller.getRunName (controller.getRunNext()));
+        run->setProperty ("onAir", controller.getRunName (controller.getRunOnAir()));
+        root->setProperty ("run", run);
+    }
+
     // the countdown key: the sting started last (one still playing on rather than fading out, if any)
     const PlaybackEngine::VoiceInfo* now = nullptr;
     for (auto& v : voices)   // newest first
