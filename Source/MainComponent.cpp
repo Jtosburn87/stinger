@@ -100,7 +100,7 @@ void MainComponent::showCredits()
 }
 
 MainComponent::MainComponent (ShowController& c, juce::PropertiesFile& s)
-    : controller (c), settings (s), surface (c, s), streamDeck (c), grid (c), playlist (c), nowPlaying (c), cueSettings (c)
+    : controller (c), settings (s), surface (c, s), streamDeck (c), remote (c, s), grid (c), playlist (c), nowPlaying (c), cueSettings (c)
 {
     addAndMakeVisible (grid);
     addAndMakeVisible (playlist);
@@ -177,6 +177,10 @@ MainComponent::MainComponent (ShowController& c, juce::PropertiesFile& s)
     streamDeck.perform = [this] (const juce::String& action) { perform (action); };
     streamDeck.shownBank = [this] { return grid.getBank(); };
     streamDeck.colourOf = [] (const Cue& cue) { return "#" + Look::colourOf (cue).toDisplayString (false).toLowerCase(); };
+    remote.perform = streamDeck.perform;
+    remote.shownBank = streamDeck.shownBank;
+    remote.colourOf = streamDeck.colourOf;
+    remote.restore();
     grid.slotKey = [this] (int slot) { return surface.getCommands().get ("slot" + juce::String (slot + 1)).keyPress(); };
     cueSettings.setControlSurface (&surface);
     cueSettings.setSettings (&settings);
@@ -219,6 +223,7 @@ MainComponent::~MainComponent()
         delete importWindow.getComponent();   // it shows importPanel without owning it
     surface.removeChangeListener (this);
     controlsWindow = nullptr;
+    remoteWindow = nullptr;
     controller.getEngine().getDeviceManager().removeChangeListener (this);
     controller.removeChangeListener (this);
 }
@@ -280,7 +285,11 @@ void MainComponent::rebuildBanks()
         button->setClickingTogglesState (true);
         button->setToggleState (b == grid.getBank(), juce::dontSendNotification);
         button->onClick = [this, b] { grid.setBank (b); };
-        button->onRightClick = [this, b] { startRenamingBank (b); };
+        // after the click is done: mouseDown below would otherwise take the focus straight back and close the box
+        button->onRightClick = [safe = juce::Component::SafePointer<MainComponent> (this), b]
+        {
+            juce::MessageManager::callAsync ([safe, b] { if (safe != nullptr) safe->startRenamingBank (b); });
+        };
         button->setTooltip ("Ctrl+" + juce::String (b + 1) + " (right-click to rename)");
         button->setWantsKeyboardFocus (false);
         addAndMakeVisible (button);
@@ -430,6 +439,14 @@ bool MainComponent::keyPressed (const juce::KeyPress& key)
             return editor.paste() || true;
         if (key == juce::KeyPress::deleteKey && editor.hasSelection())
             return editor.cutSelection (false);
+        // edit mode: Delete clears the selected button (as "Clear button" in its menu)
+        if (key == juce::KeyPress::deleteKey && grid.isEditMode())
+        {
+            const int id = grid.getSelected();
+            if (controller.getShow().isValid (id) && ! controller.getShow().cue (id).isEmpty())
+                controller.clearCue (id);
+            return true;
+        }
     }
     return surface.handleKey (key);
 }
@@ -500,6 +517,14 @@ void MainComponent::showControls()
     controlsWindow->toFront (true);
 }
 
+void MainComponent::showRemote()
+{
+    if (remoteWindow == nullptr)
+        remoteWindow = std::make_unique<RemoteWindow> (remote);
+    remoteWindow->setVisible (true);
+    remoteWindow->toFront (true);
+}
+
 void MainComponent::showFileMenu()
 {
     juce::PopupMenu m;
@@ -507,6 +532,8 @@ void MainComponent::showFileMenu()
     m.addItem (2, "Open show...");
     m.addItem (3, "Save show", controller.getShowFile() != juce::File());
     m.addItem (4, "Save show as...");
+    m.addSeparator();
+    m.addItem (6, remote.isOn() ? "Wi-Fi remote (on)..." : "Wi-Fi remote...");
     m.addSeparator();
     m.addItem (5, "Credits");
     juce::Component::SafePointer<MainComponent> safe (this);
@@ -537,6 +564,8 @@ void MainComponent::showFileMenu()
             safe->saveShow (true);
         else if (result == 5)
             safe->showCredits();
+        else if (result == 6)
+            safe->showRemote();
     });
 }
 

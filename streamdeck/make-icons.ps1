@@ -53,8 +53,20 @@ function Glyph-Text ($g, [single]$size, [string]$text, [single]$scale) {
     $fmt = New-Object System.Drawing.StringFormat; $fmt.Alignment = "Center"; $fmt.LineAlignment = "Center"
     $g.DrawString($text, $font, (New-Object System.Drawing.SolidBrush $light), (New-Object System.Drawing.RectangleF 0, 0, $size, $size), $fmt)
 }
-Action-Icon "button"   { param($g, $s) $pen = New-Object System.Drawing.Pen $light, ($s / 12); $g.DrawRectangle($pen, $s * 0.15, $s * 0.15, $s * 0.7, $s * 0.7); Draw-Swell $g $s $light 1.6 }
-Action-Icon "go"       { param($g, $s) Glyph-Text $g $s "GO" 0.5 }
+# the same two icons the keys carry in their corner: a pad = a button, a list with a play triangle = a playlist (GO)
+function Rounded-Rect ([single]$x, [single]$y, [single]$w, [single]$h, [single]$r) {
+    $p = New-Object System.Drawing.Drawing2D.GraphicsPath
+    $p.AddArc($x, $y, 2 * $r, 2 * $r, 180, 90); $p.AddArc($x + $w - 2 * $r, $y, 2 * $r, 2 * $r, 270, 90)
+    $p.AddArc($x + $w - 2 * $r, $y + $h - 2 * $r, 2 * $r, 2 * $r, 0, 90); $p.AddArc($x, $y + $h - 2 * $r, 2 * $r, 2 * $r, 90, 90)
+    $p.CloseFigure(); return $p
+}
+Action-Icon "button"   { param($g, $s) $k = $s / 24; $pen = New-Object System.Drawing.Pen $light, (2.2 * $k)
+                         $g.DrawPath($pen, (Rounded-Rect (2 * $k) (2 * $k) (20 * $k) (20 * $k) (4.5 * $k)))
+                         $g.FillPath((New-Object System.Drawing.SolidBrush $light), (Rounded-Rect (7.5 * $k) (7.5 * $k) (9 * $k) (9 * $k) (2 * $k))) }
+Action-Icon "go"       { param($g, $s) $k = $s / 24; $pen = New-Object System.Drawing.Pen $light, (2.6 * $k); $pen.StartCap = "Round"; $pen.EndCap = "Round"
+                         $g.DrawLine($pen, 2 * $k, 4 * $k, 16 * $k, 4 * $k); $g.DrawLine($pen, 2 * $k, 11 * $k, 16 * $k, 11 * $k); $g.DrawLine($pen, 2 * $k, 18 * $k, 9 * $k, 18 * $k)
+                         $tri = @((13, 13), (23, 18), (13, 23)) | ForEach-Object { New-Object System.Drawing.PointF ($_[0] * $k), ($_[1] * $k) }
+                         $g.FillPolygon((New-Object System.Drawing.SolidBrush $light), [System.Drawing.PointF[]]$tri) }
 Action-Icon "fadenext" { param($g, $s) $pen = New-Object System.Drawing.Pen $light, ($s / 10); $g.DrawLine($pen, $s * 0.1, $s * 0.8, $s * 0.9, $s * 0.2); $g.DrawLine($pen, $s * 0.1, $s * 0.2, $s * 0.9, $s * 0.8) }
 Action-Icon "stopall"  { param($g, $s) $g.FillRectangle((New-Object System.Drawing.SolidBrush $light), $s * 0.22, $s * 0.22, $s * 0.56, $s * 0.56) }
 Action-Icon "fadeall"  { param($g, $s) $pen = New-Object System.Drawing.Pen $light, ($s / 10); $g.DrawLine($pen, $s * 0.1, $s * 0.2, $s * 0.9, $s * 0.8) }

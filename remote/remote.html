@@ -1,0 +1,897 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0e1013">
+<title>Stinger Remote</title>
+<style>
+:root {
+    --ground: #0e1013;
+    --bar: #15181c;
+    --line: #2c323a;
+    --text: #e8eaed;
+    --dim: #8b95a1;
+    --amber: #f2a33a;
+    --green: #2f8f5b;
+    --red: #c93a3f;
+    --blue: #5aa9f0;
+    --gap: 8px;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; background: var(--ground); color: var(--text);
+             font-family: "Segoe UI", -apple-system, Helvetica, Arial, sans-serif; overflow: hidden;
+             -webkit-user-select: none; user-select: none; touch-action: manipulation; }
+body { display: flex; flex-direction: column; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+
+header { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--bar); border-bottom: 1px solid var(--line); flex: none; }
+.logo { font-weight: 800; letter-spacing: 2px; color: var(--amber); font-size: 15px; }
+.bank { color: var(--dim); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: #555; flex: none; }
+.dot.on { background: #3ccf7a; box-shadow: 0 0 6px #3ccf7a; }
+header button { background: #262b32; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; font: inherit; font-size: 13px; font-weight: 600; }
+header button.lit { background: var(--amber); color: #1a1206; border-color: var(--amber); }
+
+/* bank tabs, like the app's: tap one to show that bank (in Stinger too) */
+#banks { display: flex; gap: 6px; padding: 6px 8px; background: var(--bar); border-bottom: 1px solid var(--line); overflow-x: auto; flex: none; }
+#banks:empty { display: none; }
+#banks button { flex: 1 0 72px; min-width: 0; background: #1e2228; color: #c9d0d8; border: 1px solid var(--line); border-radius: 6px;
+                padding: 8px 6px; font: inherit; font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#banks button.lit { background: #2a2418; color: #f5c77e; border-color: var(--amber); }
+
+main { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: var(--gap); position: relative; }
+#grid { display: grid; grid-gap: var(--gap); gap: var(--gap); }
+.key { position: relative; border-radius: 12px; overflow: hidden; background: #000; cursor: pointer; }   /* (cursor: old iOS only sends taps to "clickable" things) */
+.key svg { display: block; width: 100%; height: 100%; }
+.key.down { transform: scale(0.95); filter: brightness(1.25); }
+.editing .key::after { content: "✎"; position: absolute; right: 6px; top: 4px; font-size: 14px; color: #fff;
+                       background: rgba(0,0,0,0.55); border-radius: 4px; padding: 0 4px; }
+.editing .key { outline: 2px dashed var(--amber); outline-offset: -2px; }
+
+#banner { position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: none; align-items: center; justify-content: center; flex-direction: column; gap: 8px;
+          background: rgba(14,16,19,0.82); text-align: center; padding: 24px; z-index: 5; }
+#banner.show { display: flex; }
+#banner b { font-size: 20px; color: var(--amber); }
+#banner span { color: var(--dim); font-size: 14px; max-width: 320px; line-height: 1.4; }
+
+#editbar { display: none; gap: 8px; padding: 8px 12px; background: #2a2418; border-top: 1px solid var(--amber); align-items: center; flex: none; }
+.editing #editbar { display: flex; }
+#editbar span { flex: 1; font-size: 13px; color: #f5c77e; }
+#editbar button { background: #262b32; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; font: inherit; font-size: 13px; }
+
+#sheet { position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: rgba(0,0,0,0.6); display: none; align-items: flex-end; justify-content: center; z-index: 10; }
+#sheet.show { display: flex; }
+.panel { background: var(--bar); border: 1px solid var(--line); border-radius: 14px 14px 0 0; width: 100%; max-width: 480px; padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+         display: flex; flex-direction: column; gap: 12px; max-height: 85vh; overflow-y: auto; }
+.panel h2 { margin: 0; font-size: 16px; }
+.panel label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--dim); }
+.panel select, .panel textarea { background: #0e1013; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 10px; font: inherit; font-size: 16px; }
+.panel textarea { resize: none; -webkit-user-select: text; user-select: text; }
+.panel input[type=color] { width: 100%; height: 42px; padding: 2px; background: #0e1013; border: 1px solid var(--line); border-radius: 8px; }
+.panel #textOptions { display: flex; flex-direction: column; gap: 12px; }
+/* the live preview of the key being edited (not an edit target itself) */
+#preview { width: 132px; height: 132px; flex: none; align-self: center; }
+.editing #preview { outline: none; }
+.editing #preview::after { content: none; }
+.panel button.small { align-self: flex-end; height: 42px; border-radius: 8px; border: 1px solid var(--line); background: #262b32; color: var(--text); font: inherit; font-size: 14px; }
+.panel .row { display: flex; gap: 8px; }
+.panel .row > * { flex: 1; }
+.panel .buttons { display: flex; gap: 8px; margin-top: 4px; }
+.panel .buttons button { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid var(--line); background: #262b32; color: var(--text); font: inherit; font-weight: 600; font-size: 15px; }
+.panel .buttons button.primary { background: var(--amber); border-color: var(--amber); color: #1a1206; }
+.hidden { display: none !important; }
+
+/* Older Safari (iOS 12 to 14.4, e.g. an iPad Mini 2) has no gap in flex layouts: the same spacing with margins.
+   (Browsers without "inset" are exactly those.) */
+@supports not (inset: 0) {
+    header > * + * { margin-left: 10px; }
+    #banks > * + * { margin-left: 6px; }
+    #banner > * + * { margin-top: 8px; }
+    #editbar > * + * { margin-left: 8px; }
+    .panel > * + *, .panel #textOptions > * + * { margin-top: 12px; }
+    .panel label > select, .panel label > textarea, .panel label > input { margin-top: 4px; }
+    .panel .row > * + *, .panel .buttons > * + * { margin-left: 8px; }
+}
+</style>
+</head>
+<body>
+<header>
+    <div class="dot" id="dot"></div>
+    <div class="logo">STINGER</div>
+    <div class="bank" id="bank">connecting…</div>
+    <button id="sizeButton" title="Switch between 24 keys (Stinger's buttons) and a 12-key layout">24 keys</button>
+    <button id="editButton">Edit</button>
+</header>
+<nav id="banks"></nav>
+<main>
+    <div id="grid"></div>
+    <div id="banner"><b id="bannerTitle">Connecting to Stinger…</b><span id="bannerText">Keep this page open. It reconnects by itself.</span></div>
+</main>
+<div id="editbar"><span>Tap a key to change it. Saved in Stinger.</span><button id="resetButton">Reset</button><button id="doneButton">Done</button></div>
+
+<div id="sheet">
+    <div class="panel">
+        <h2 id="sheetTitle">Key</h2>
+        <label>Action
+            <select id="kind">
+                <option value="button">Button</option>
+                <option value="countdown">Countdown</option>
+                <option value="go">GO</option>
+                <option value="fadenext">Fade to next</option>
+                <option value="stopall">Stop all</option>
+                <option value="fadeall">Fade all</option>
+                <option value="bank">Bank</option>
+                <option value="selfdestruct">Self Destruct</option>
+                <option value="resetcolours">Reset colours</option>
+                <option value="empty">Nothing (blank key)</option>
+            </select>
+        </label>
+        <div id="buttonOptions" class="row">
+            <label>Which button
+                <select id="mode">
+                    <option value="shown">Position in the shown bank</option>
+                    <option value="fixed">One fixed button</option>
+                </select>
+            </label>
+        </div>
+        <div id="buttonWhere" class="row">
+            <label id="bankLabel">Bank <select id="fixedBank"></select></label>
+            <label>Button <select id="position"></select></label>
+        </div>
+        <label id="goOptions">Playlist <select id="playlist"></select></label>
+        <div id="goColour" class="row">
+            <label>Key colour <input type="color" id="keyColour" value="#2f8f5b"></label>
+            <button id="defaultColour" type="button" class="small">Default green</button>
+        </div>
+        <label id="bankOptions">Bank <select id="bankChoice"></select></label>
+        <div id="textOptions">
+            <div id="preview" class="key" title="How the key will look"></div>
+            <label>Text (empty = the key's own label; Enter for a new line)
+                <textarea id="keyText" rows="2" maxlength="60" placeholder="e.g. WALK-UP"></textarea>
+            </label>
+            <div class="row">
+                <label>Size
+                    <select id="textSize">
+                        <option value="16">Small</option>
+                        <option value="22">Medium</option>
+                        <option value="30">Large</option>
+                        <option value="40">Extra large</option>
+                        <option value="52">Huge</option>
+                    </select>
+                </label>
+                <label>Position
+                    <select id="textAlign">
+                        <option value="top">Top</option>
+                        <option value="middle">Middle</option>
+                        <option value="bottom">Bottom</option>
+                    </select>
+                </label>
+                <label>Colour <input type="color" id="textColour" value="#ffffff"></label>
+            </div>
+        </div>
+        <div class="buttons"><button id="cancelButton">Cancel</button><button id="saveButton" class="primary">Save</button></div>
+    </div>
+</div>
+
+<script>
+// Stinger Wi-Fi remote. Served by Stinger itself (http://<laptop>:52818/?k=<key>); talks to it over a WebSocket
+// on the same address: sends {"type":"press","action":...} and {"type":"layout",...}, draws every key from
+// Stinger's {"type":"state"} messages. Keys are drawn like the Stream Deck plugin's (same SVG code).
+
+const DEMO = !! window.STINGER_DEMO || location.protocol === 'file:';
+// grid: Stinger's 24 buttons as laid out in the app (6 across, 4 down) - the default; phone: 12 keys, 3 x 4 (turns with the screen)
+const SIZES = { grid: { keys: 24, cols: 6, rows: 4, fixed: true }, phone: { keys: 12, cols: 3, rows: 4 } };
+
+let socket = null;
+let state = null;             // last state from Stinger, null = not connected
+let editing = false;
+let editIndex = -1;
+let sheetOpenedAt = 0;
+let failures = 0;
+let device = load ('stingerRemoteKeys') === 'phone' ? 'phone' : 'grid';   // a new phone starts mirroring Stinger's buttons
+const shown = [];             // key index -> last svg
+let banksShown = '';          // the bank tabs last drawn
+
+function load (k) { try { return localStorage.getItem (k); } catch (e) { return null; } }
+function save (k, v) { try { localStorage.setItem (k, v); } catch (e) {} }
+
+// Finger / mouse down and up. Pointer events where there are any; older Safari (iOS 12 and before, e.g. an
+// iPad Mini 2) only has touch and mouse events. (preventDefault on touchstart stops the mouse copy that follows.)
+function onPress (element, handler) {
+    if (window.PointerEvent) {
+        element.addEventListener ('pointerdown', handler);
+        return;
+    }
+    element.addEventListener ('touchstart', handler, { passive: false });
+    element.addEventListener ('mousedown', handler);
+}
+
+function onRelease (element, handler) {
+    const types = window.PointerEvent ? [ 'pointerup', 'pointerleave', 'pointercancel' ]
+                                      : [ 'touchend', 'touchcancel', 'mouseup', 'mouseleave' ];
+    for (const type of types)
+        element.addEventListener (type, handler);
+}
+
+// ---- layouts (kept in Stinger, so every phone and tablet gets the same ones) ----
+
+function defaultLayout (which) {
+    const b = (n) => ({ kind: 'button', mode: 'shown', position: n });
+    if (which === 'grid')   // the same buttons, in the same places, as the bank shown in Stinger
+        return Array.from ({ length: 24 }, (_, n) => b (n + 1));
+    return [ { kind: 'countdown' }, { kind: 'go', playlist: 'selected' }, { kind: 'fadenext' },
+             b(1), b(2), b(3), b(4), b(5), b(6),
+             { kind: 'bank', bank: 'previous' }, { kind: 'bank', bank: 'next' }, { kind: 'stopall' } ];
+}
+
+function layout () {
+    const saved = state && state.layouts && state.layouts[device];
+    const keys = defaultLayout (device);
+    if (Array.isArray (saved) && saved.length > 0)
+        for (let i = 0; i < keys.length; ++i)
+            keys[i] = saved[i] && saved[i].kind ? saved[i] : { kind: 'empty' };
+    return keys;
+}
+
+function sendLayout (keys) {
+    if (DEMO) {
+        state.layouts = state.layouts || {};
+        state.layouts[device] = keys;
+        drawAll();
+        return;
+    }
+    if (socket && socket.readyState === WebSocket.OPEN)
+        socket.send (JSON.stringify ({ type: 'layout', device, keys }));
+}
+
+// ---- connection ----
+
+function connect () {
+    if (DEMO) {
+        startDemo();
+        return;
+    }
+    const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws' + location.search;
+    try {
+        socket = new WebSocket (url);
+    } catch (e) {
+        retry();
+        return;
+    }
+    socket.onopen = () => { failures = 0; };
+    socket.onmessage = (e) => {
+        const m = JSON.parse (e.data);
+        if (m.type === 'state') {
+            state = m;
+            drawAll();
+        }
+    };
+    socket.onclose = () => {
+        state = null;
+        ++failures;
+        drawAll();
+        retry();
+    };
+    socket.onerror = () => {};
+}
+
+function retry () { setTimeout (connect, Math.min (3000, 500 + failures * 500)); }
+
+// a phone that slept comes back with a dead socket: reconnect straight away
+document.addEventListener ('visibilitychange', () => {
+    if (! document.hidden && ! DEMO && socket && socket.readyState > WebSocket.OPEN)
+        connect();
+});
+
+// ---- the grid ----
+
+function fit () {
+    const size = SIZES[device];
+    const turn = ! size.fixed && innerWidth > innerHeight;   // the 24-key grid stays as in Stinger
+    const cols = turn ? size.rows : size.cols, rows = turn ? size.cols : size.rows;
+    const main = document.querySelector ('main');
+    const gap = 8;
+    const w = main.clientWidth - 2 * gap, h = main.clientHeight - 2 * gap;
+    const cell = Math.floor (Math.min ((w - (cols - 1) * gap) / cols, (h - (rows - 1) * gap) / rows));
+    const grid = document.getElementById ('grid');
+    grid.style.gridTemplateColumns = 'repeat(' + cols + ', ' + cell + 'px)';
+    grid.style.gridAutoRows = cell + 'px';
+}
+
+function build () {
+    const grid = document.getElementById ('grid');
+    grid.innerHTML = '';
+    shown.length = 0;
+    for (let i = 0; i < SIZES[device].keys; ++i) {
+        const k = document.createElement ('div');
+        k.className = 'key';
+        // playing fires on the finger going down (fast); editing opens on the tap itself, so the tap that
+        // follows the finger lifting doesn't land on the sheet's backdrop and close it again
+        onPress (k, (e) => { if (! editing) { e.preventDefault(); keyDown (i, k); } });
+        k.addEventListener ('click', (e) => { if (editing) { e.preventDefault(); openSheet (i); } });
+        onRelease (k, () => k.classList.remove ('down'));
+        k.addEventListener ('contextmenu', (e) => e.preventDefault());
+        grid.appendChild (k);
+    }
+    document.getElementById ('sizeButton').textContent = SIZES[device].keys + ' keys';
+    fit();
+    drawAll();
+}
+
+function drawAll () {
+    const keys = layout();
+    const grid = document.getElementById ('grid');
+    for (let i = 0; i < grid.children.length; ++i) {
+        const svg = render (keys[i]);
+        if (shown[i] !== svg) {
+            shown[i] = svg;
+            grid.children[i].innerHTML = svg;
+        }
+    }
+    document.getElementById ('dot').classList.toggle ('on', !! state);
+    document.getElementById ('bank').textContent = state ? '' : 'not connected';
+    drawBanks();
+    const banner = document.getElementById ('banner');
+    banner.classList.toggle ('show', ! state);
+    document.getElementById ('bannerTitle').textContent = failures > 0 ? 'Lost Stinger, reconnecting…' : 'Connecting to Stinger…';
+    document.getElementById ('bannerText').textContent = failures >= 4
+        ? 'Is Stinger open with the remote on, and this phone on the same Wi-Fi? If Stinger made a new link, scan its QR code again.'
+        : 'Keep this page open. It reconnects by itself.';
+}
+
+function drawBanks () {
+    const nav = document.getElementById ('banks');
+    const names = state ? (state.banks || []) : [];
+    const signature = JSON.stringify ([names, state ? state.bank : -1]);
+    if (signature === banksShown)
+        return;
+    const before = nav.scrollLeft;
+    banksShown = signature;
+    nav.innerHTML = '';
+    names.forEach ((name, b) => {
+        const tab = document.createElement ('button');
+        tab.textContent = bankLetter (b) + (name ? ' · ' + name : '');
+        tab.classList.toggle ('lit', b === state.bank);
+        onPress (tab, (e) => { e.preventDefault(); press ('bank' + (b + 1)); });
+        nav.appendChild (tab);
+    });
+    nav.scrollLeft = before;
+    fit();   // the tabs take some height
+}
+
+function press (action) {
+    if (navigator.vibrate)
+        navigator.vibrate (12);
+    if (DEMO)
+        demoPress (action);
+    else if (socket && socket.readyState === WebSocket.OPEN)
+        socket.send (JSON.stringify ({ type: 'press', action }));
+}
+
+function keyDown (i, element) {
+    if (! state)
+        return;
+    const action = actionOf (layout()[i]);
+    if (! action)
+        return;
+    element.classList.add ('down');
+    if (navigator.vibrate)
+        navigator.vibrate (12);
+    if (DEMO)
+        demoPress (action);
+    else if (socket && socket.readyState === WebSocket.OPEN)
+        socket.send (JSON.stringify ({ type: 'press', action }));
+}
+
+// ---- editing ----
+
+function setEditing (on) {
+    editing = on;
+    document.body.classList.toggle ('editing', on);
+    document.getElementById ('editButton').classList.toggle ('lit', on);
+    setTimeout (fit, 0);
+}
+
+function fillSelect (id, options, value) {
+    const s = document.getElementById (id);
+    s.innerHTML = '';
+    for (const [v, label] of options) {
+        const o = document.createElement ('option');
+        o.value = v;
+        o.textContent = label;
+        s.appendChild (o);
+    }
+    s.value = String (value);
+    if (s.selectedIndex < 0)
+        s.selectedIndex = 0;
+}
+
+function bankOptions () {
+    const names = (state && state.banks) || [];
+    const out = [];
+    for (let b = 0; b < Math.max (names.length, 1); ++b)
+        out.push ([String (b), 'Bank ' + bankLetter (b) + (names[b] ? ': ' + names[b] : '')]);
+    return out;
+}
+
+function openSheet (i) {
+    editIndex = i;
+    const k = layout()[i];
+    document.getElementById ('sheetTitle').textContent = 'Key ' + (i + 1);
+    document.getElementById ('kind').value = k.kind;
+    document.getElementById ('mode').value = k.mode === 'fixed' ? 'fixed' : 'shown';
+    fillSelect ('fixedBank', bankOptions(), k.bank || 0);
+    fillSelect ('position', Array.from ({ length: 24 }, (_, n) => [String (n + 1), String (n + 1)]), k.position || 1);
+    const lists = (state && state.playlists) || [];
+    fillSelect ('playlist', [['selected', 'The selected playlist']].concat (lists.map ((p, n) => [String (n), (n + 1) + ': ' + p.name])), k.playlist || 'selected');
+    fillSelect ('bankChoice', [['next', 'Next bank'], ['previous', 'Previous bank']].concat (bankOptions()), k.kind === 'bank' ? (k.bank || 'next') : 'next');
+    document.getElementById ('keyColour').value = validColour (k.keyColour) || '#2f8f5b';
+    document.getElementById ('keyText').value = k.text || '';
+    document.getElementById ('textSize').value = String (k.size || 22);
+    if (document.getElementById ('textSize').selectedIndex < 0)
+        document.getElementById ('textSize').value = '22';
+    document.getElementById ('textAlign').value = k.align || 'middle';
+    document.getElementById ('textColour').value = validColour (k.textColour) || '#ffffff';
+    sheetVisibility();
+    updatePreview();
+    document.getElementById ('sheet').classList.add ('show');
+    sheetOpenedAt = Date.now();
+}
+
+function sheetVisibility () {
+    const kind = document.getElementById ('kind').value;
+    const fixed = document.getElementById ('mode').value === 'fixed';
+    document.getElementById ('buttonOptions').classList.toggle ('hidden', kind !== 'button');
+    document.getElementById ('buttonWhere').classList.toggle ('hidden', kind !== 'button');
+    document.getElementById ('bankLabel').classList.toggle ('hidden', ! fixed);
+    document.getElementById ('goOptions').classList.toggle ('hidden', kind !== 'go');
+    document.getElementById ('goColour').classList.toggle ('hidden', kind !== 'go');
+    document.getElementById ('bankOptions').classList.toggle ('hidden', kind !== 'bank');
+    document.getElementById ('textOptions').classList.toggle ('hidden', kind === 'empty');
+}
+
+/** The key as the menu has it now. */
+function sheetKey () {
+    const kind = document.getElementById ('kind').value;
+    const k = { kind };
+    if (kind === 'button') {
+        k.mode = document.getElementById ('mode').value;
+        k.position = parseInt (document.getElementById ('position').value);
+        if (k.mode === 'fixed')
+            k.bank = parseInt (document.getElementById ('fixedBank').value);
+    } else if (kind === 'go') {
+        k.playlist = document.getElementById ('playlist').value;
+        const colour = document.getElementById ('keyColour').value;
+        if (colour.toLowerCase() !== '#2f8f5b')
+            k.keyColour = colour;
+    } else if (kind === 'bank') {
+        k.bank = document.getElementById ('bankChoice').value;
+    }
+    const text = document.getElementById ('keyText').value;
+    if (kind !== 'empty' && text.trim()) {
+        k.text = text;
+        k.size = parseInt (document.getElementById ('textSize').value);
+        k.align = document.getElementById ('textAlign').value;
+        k.textColour = document.getElementById ('textColour').value;
+    }
+    return k;
+}
+
+/** The preview above the text box: the key drawn as it will be (live, with the same wrapping), redrawn on every change. */
+function updatePreview () {
+    const preview = document.getElementById ('preview');
+    if (! document.getElementById ('textOptions').classList.contains ('hidden'))
+        preview.innerHTML = render (sheetKey());
+}
+
+function saveSheet () {
+    const keys = layout();
+    keys[editIndex] = sheetKey();
+    sendLayout (keys);
+    closeSheet();
+}
+
+function closeSheet () { document.getElementById ('sheet').classList.remove ('show'); }
+
+document.getElementById ('kind').addEventListener ('change', sheetVisibility);
+document.getElementById ('defaultColour').addEventListener ('click', () => { document.getElementById ('keyColour').value = '#2f8f5b'; updatePreview(); });
+document.getElementById ('mode').addEventListener ('change', sheetVisibility);
+// any change in the menu (typing included) redraws the preview
+for (const type of [ 'input', 'change' ])
+    document.querySelector ('#sheet .panel').addEventListener (type, () => updatePreview());
+document.getElementById ('saveButton').addEventListener ('click', saveSheet);
+document.getElementById ('cancelButton').addEventListener ('click', closeSheet);
+// tapping the dark backdrop closes the sheet (not a stray tap from the one that just opened it)
+document.getElementById ('sheet').addEventListener ('click', (e) => { if (e.target.id === 'sheet' && Date.now() - sheetOpenedAt > 400) closeSheet(); });
+document.getElementById ('editButton').addEventListener ('click', () => setEditing (! editing));
+document.getElementById ('doneButton').addEventListener ('click', () => setEditing (false));
+document.getElementById ('resetButton').addEventListener ('click', () => {
+    if (confirm (device === 'grid' ? 'Put the 24 keys back to Stinger\'s buttons?' : 'Put the 12-key layout back to the default?'))
+        sendLayout ([]);
+});
+document.getElementById ('sizeButton').addEventListener ('click', () => {
+    device = device === 'phone' ? 'grid' : 'phone';
+    save ('stingerRemoteKeys', device);
+    build();
+});
+addEventListener ('resize', fit);
+
+// ---- actions (the same ids as Stinger's keys, MIDI and Stream Deck) ----
+
+function actionOf (k) {
+    if (! k)
+        return null;
+    switch (k.kind) {
+        case 'button': {
+            const position = clamp (parseInt (k.position || '1'), 1, 24);
+            if (k.mode === 'fixed')
+                return 'cue:' + (clamp (parseInt (k.bank || '0'), 0, 7) * 24 + position - 1);
+            return 'slot' + position;
+        }
+        case 'go':       return k.playlist && k.playlist !== 'selected' ? 'go' + (clamp (parseInt (k.playlist), 0, 7) + 1) : 'go';
+        case 'fadenext': return 'fadeNext';
+        case 'stopall':  return 'stopAll';
+        case 'fadeall':  return 'fadeAll';
+        case 'selfdestruct':  return 'selfDestruct';
+        case 'resetcolours':  return 'resetColours';
+        case 'bank':
+            if (! k.bank || k.bank === 'next') return 'bankNext';
+            if (k.bank === 'previous') return 'bankPrev';
+            return 'bank' + (clamp (parseInt (k.bank || '0'), 0, 7) + 1);
+    }
+    return null;   // countdown (display only), empty
+}
+
+// ---- drawing (from the Stream Deck plugin) ----
+
+function render (k) {
+    if (! k || k.kind === 'empty')
+        return key ('#0b0c0e', '#1a1d22', []);
+    if (! state)
+        return key ('#15181c', '#2c323a', [ text ('STINGER', 72, 78, 18, '#4a5260', true) ]);
+    return renderKind (k.kind, k, actionOf (k), customOf (k));
+}
+
+/** The key's own text from Edit (null = the key's own label). */
+function customOf (k) {
+    if (! k.text || ! String (k.text).trim())
+        return null;
+    return { text: k.text, size: clamp (parseInt (k.size || '22'), 8, 72), colour: validColour (k.textColour) || '#ffffff',
+             align: k.align || 'middle', bold: true };
+}
+
+/** A key for an action. s = its settings (playlist, bank, keyColour); custom = your own text (null = the key's own label). */
+function renderKind (kind, s, action, custom) {
+    const own = (label) => custom ? customText (custom) : label;   // your text in place of the key's own label
+    switch (kind) {
+        case 'button':    return renderButton (action, custom);
+        case 'countdown': return renderCountdown (custom);
+        case 'go': {
+            // the selected playlist, or the one picked in the key's settings; any colour (default green)
+            const lists = state.playlists || [];
+            const fixed = s.playlist && s.playlist !== 'selected';
+            const index = fixed ? clamp (parseInt (s.playlist), 0, 7) : (state.go.playlist || 0);
+            const list = fixed ? lists[index] : { name: (lists[index] || {}).name, next: state.go.next, looping: state.go.looping };
+            if (! list)
+                return key ('#15181c', '#2c323a', [ glyph ('playlist', 10, 8, 18, '#6e7885'), ...own ([ text ('GO', 72, 70, 44, '#4a5260', true) ]),
+                                                    text ('no playlist ' + (index + 1), 72, 104, 14, '#6e7885') ]);
+            const back = validColour (s.keyColour) || '#2f8f5b';
+            const fore = validColour (s.keyColour) ? textOn (back) : '#ffffff';
+            const sub = list.looping ? 'finishes loop' : (list.next || 'end of list');
+            const parts = [ glyph ('playlist', 10, 8, 18, fore), ...own ([ text ('GO', 72, 74, 44, fore, true) ]),
+                            ...lines (sub, 72, 110, 15, fore, 2, 15).map (t => t.replace ('fill-opacity="1"', 'fill-opacity="0.85"')) ];
+            if (list.name && (fixed || lists.length > 1))
+                parts.push (text (list.name.length > 11 ? list.name.substring (0, 10) + '…' : list.name, 78, 24, 14, fore, true, 'middle', 0.8));
+            return key (back, back, parts);
+        }
+        case 'fadenext':
+            return key ('#172636', '#3f6a95', own ([ text ('FADE TO', 72, 62, 22, '#a9d0f7', true), text ('NEXT', 72, 90, 22, '#a9d0f7', true) ]));
+        case 'stopall':
+            return key (state.anyPlaying ? '#c93a3f' : '#3a1c1e', '#c93a3f', own ([ text ('STOP', 72, 64, 28, '#ffffff', true), text ('ALL', 72, 96, 28, '#ffffff', true) ]));
+        case 'fadeall':
+            return key ('#262b32', state.anyPlaying ? '#f2a33a' : '#4a5260', own ([ text ('FADE', 72, 64, 26, '#e8eaed', true), text ('ALL', 72, 96, 26, '#e8eaed', true) ]));
+        case 'selfdestruct':
+            // lit red while the mode is on
+            return state.selfDestruct
+                ? key ('#8a1c1f', '#e5484d', [ ...own ([ text ('SELF', 72, 52, 24, '#ffffff', true), text ('DESTRUCT', 72, 80, 22, '#ffffff', true) ]), text ('ON', 72, 116, 20, '#ffd1d2', true) ], 8)
+                : key ('#1e2228', '#4a5260', [ ...own ([ text ('SELF', 72, 52, 24, '#a7b0bb', true), text ('DESTRUCT', 72, 80, 22, '#a7b0bb', true) ]), text ('OFF', 72, 116, 20, '#6e7885', true) ]);
+        case 'resetcolours': {
+            const spent = (state.cues || []).filter (c => c.spent).length;
+            return key (spent ? '#262b32' : '#15181c', spent ? '#c9d0d8' : '#2c323a',
+                        [ ...own ([ text ('RESET', 72, 60, 26, spent ? '#e8eaed' : '#4a5260', true), text ('COLOURS', 72, 90, 20, spent ? '#e8eaed' : '#4a5260', true) ]),
+                          text (spent ? spent + ' black' : 'none black', 72, 118, 14, spent ? '#a7b0bb' : '#4a5260') ]);
+        }
+        case 'bank': {
+            if (! s.bank || s.bank === 'next' || s.bank === 'previous')
+                return key ('#1e2228', '#2c323a', [ ...own ([ text (s.bank !== 'previous' ? 'BANK ▶' : '◀ BANK', 72, 66, 24, '#c9d0d8', true) ]),
+                                                    text (bankLetter (state.bank) + ' · ' + (state.banks[state.bank] || ''), 72, 98, 14, '#a7b0bb') ]);
+            const b = clamp (parseInt (s.bank || '0'), 0, 7);
+            const current = b === state.bank;
+            return key (current ? '#2a2418' : '#1e2228', current ? '#f2a33a' : '#2c323a',
+                        [ ...own ([ text (bankLetter (b), 72, 70, 44, current ? '#f5c77e' : '#c9d0d8', true) ]),
+                          ...lines (state.banks[b] || '', 72, 106, 15, current ? '#f5c77e' : '#a7b0bb', 2, 15) ]);
+        }
+    }
+    return key ('#15181c', '#2c323a', []);
+}
+
+function renderButton (action, custom) {
+    let cue = null, label = '';
+    if (action.startsWith ('cue:')) {
+        const id = parseInt (action.substring (4));
+        cue = state.cues.find (c => c.id === id) || null;
+        label = bankLetter (Math.floor (id / 24)) + ((id % 24) + 1);
+    } else {
+        const slot = parseInt (action.substring (4)) - 1;
+        cue = state.cues.find (c => c.bank === state.bank && c.slot === slot) || null;
+        label = bankLetter (state.bank) + (slot + 1);
+    }
+    if (! cue)
+        return key ('#0e1013', '#2c323a', [ glyph ('button', 10, 10, 18, '#4a5260'),
+                                            ...(custom ? customText (custom) : [ text (label, 72, 66, 22, '#4a5260', true), text ('empty', 72, 94, 15, '#4a5260') ]) ]);
+
+    const parts = [];
+    if (cue.playing && cue.waitLeft !== undefined) {
+        // over, waiting before the playlist's next song
+        parts.push (...(custom ? customText (custom) : lines (cue.name, 72, 34, 16, '#a9d0f7', 2, 16)));
+        parts.push (text ('NEXT IN', 72, 76, 16, '#a9d0f7', true));
+        parts.push (text (time (cue.waitLeft), 72, 112, 34, '#ffffff', true));
+        return key ('#172636', '#5aa9f0', parts, 8);
+    }
+    if (cue.playing) {
+        // playing: the whole key in the button's colour, the countdown big
+        const back = cue.stopping ? shade (cue.colour, 0.55) : cue.colour;
+        const fore = textOn (back);
+        parts.push (...(custom ? customText (custom) : lines (cue.name, 72, 34, 16, fore, 2, 16)));
+        parts.push (text (cue.looping ? '↻ LOOP' : '-' + time (cue.remaining), 72, 98, cue.looping ? 28 : 38, fore, true));
+        parts.push ('<rect x="12" y="116" width="120" height="10" rx="5" fill="' + fore + '" fill-opacity="0.25"/>');
+        parts.push ('<rect x="12" y="116" width="' + Math.round (120 * Math.min (1, cue.progress || 0)) + '" height="10" rx="5" fill="' + fore + '"/>');
+        return key (back, fore, parts, 8);
+    }
+    // idle: a dark shade of the button's colour with its name (Self Destruct: spent = solid black)
+    const back = cue.spent ? '#000000' : shade (cue.colour, 0.42);
+    const fore = textOn (back);
+    parts.push ('<rect x="0" y="0" width="144" height="14" fill="' + cue.colour + '"/>');
+    parts.push (glyph ('button', 10, 20, 18, fore));
+    parts.push (...(custom ? customText (custom) : lines (cue.name, 72, 54, 20, fore, 3, 22)));
+    parts.push (text (label, 14, 132, 13, fore, false, 'start', 0.6));
+    if (cue.next) {
+        parts.push ('<rect x="84" y="118" width="52" height="20" rx="4" fill="#2f8f5b"/>');
+        parts.push (text ('NEXT', 110, 133, 13, '#ffffff', true));
+    }
+    return key (back, cue.next ? '#2f8f5b' : cue.spent ? '#2c323a' : shade (cue.colour, 0.8), parts);
+}
+
+/** The sting started last, in its colour: name (or your text), time left (tenths in the last 10 s), progress. */
+function renderCountdown (custom) {
+    const now = state.now;
+    if (! now)
+        return key ('#0e1013', '#2c323a', [ ...(custom ? customText (custom) : []), text ('--:--', 72, 78, 34, '#4a5260', true), text ('nothing playing', 72, 106, 14, '#4a5260') ]);
+    if (now.waitLeft !== undefined) {
+        // a playlist Wait: counting down to the next song
+        const big = now.waitLeft < 10 ? Number (now.waitLeft).toFixed (1) : time (now.waitLeft);
+        return key ('#172636', '#5aa9f0', [ ...(custom ? customText (custom) : [ text ('NEXT IN', 72, 30, 16, '#a9d0f7', true) ]),
+                                            text (big, 72, 80, 40, '#ffffff', true),
+                                            ...lines (now.nextName || 'next song', 72, 110, 14, '#a9d0f7', 2, 15) ], 8);
+    }
+    const ending = ! now.looping && now.remaining < 10;
+    const back = now.stopping ? shade (now.colour, 0.55) : now.colour;
+    const fore = textOn (back);
+    const parts = [];
+    parts.push (...(custom ? customText (custom) : lines (now.name, 72, 34, 16, fore, 2, 16)));
+    let big;
+    if (now.looping)
+        big = '↻ LOOP';
+    else if (now.remaining < 10)
+        big = '-' + Number (now.remaining).toFixed (1);
+    else
+        big = '-' + time (now.remaining);
+    parts.push (text (big, 72, 96, now.looping ? 28 : 38, fore, true));
+    parts.push ('<rect x="12" y="114" width="120" height="10" rx="5" fill="' + fore + '" fill-opacity="0.25"/>');
+    parts.push ('<rect x="12" y="114" width="' + Math.round (120 * Math.min (1, now.progress || 0)) + '" height="10" rx="5" fill="' + fore + '"/>');
+    if (now.others > 0)
+        parts.push (text ('+' + now.others + ' more', 132, 138, 11, fore, false, 'end', 0.8));
+    // last 10 seconds: a red frame
+    return key (back, ending && ! now.stopping ? '#ff2d2d' : fore, parts, 8);
+}
+
+/** Text as key lines: Enter starts a new line, a line too wide for the key wraps at a word (a word too long on its own is split). */
+function wrapText (s, size) {
+    const perLine = Math.max (3, Math.floor (126 / (size * 0.58)));
+    const out = [];
+    for (const raw of String (s).split (/\r?\n/)) {
+        let line = '';
+        for (let w of raw.split (/\s+/).filter (w => w.length > 0)) {
+            const candidate = line ? line + ' ' + w : w;
+            if (candidate.length <= perLine) {
+                line = candidate;
+                continue;
+            }
+            if (line)
+                out.push (line);
+            while (w.length > perLine) {
+                out.push (w.substring (0, perLine));
+                w = w.substring (perLine);
+            }
+            line = w;
+        }
+        out.push (line);
+    }
+    return out;
+}
+
+/** Your own text: lines (long ones wrap at words), size (px on the 144 px key), colour, top / middle / bottom, font,
+    bold / italic / underline. */
+function customText (t) {
+    const size = clamp (Math.round (t.size), 8, 72);
+    const all = wrapText (t.text, size).slice (0, 8);
+    const lineHeight = size * 1.1;
+    const block = lineHeight * (all.length - 1);
+    let y;
+    if (t.align === 'top')
+        y = 10 + size * 0.85;
+    else if (t.align === 'bottom')
+        y = 134 - size * 0.22 - block;
+    else
+        y = 72 + size * 0.35 - block / 2;
+    const family = t.family ? escape (t.family) + ', ' : '';
+    return all.map ((l, i) => '<text x="72" y="' + (y + i * lineHeight).toFixed (1) + '" font-family="' + family + 'Segoe UI, -apple-system, Helvetica, Arial, sans-serif"'
+                            + ' font-size="' + size + '" font-weight="' + (t.bold === false ? '400' : '700') + '"'
+                            + (t.italic ? ' font-style="italic"' : '') + (t.underline ? ' text-decoration="underline"' : '')
+                            + ' fill="' + t.colour + '" text-anchor="middle">' + escape (l) + '</text>');
+}
+
+/** A small corner icon saying what kind of key it is (a button / a playlist), so keys with your own text or colour stay recognisable. */
+function glyph (kind, x, y, size, colour) {
+    const k = size / 24;
+    const n = (v) => (v * k).toFixed (1);
+    const at = '<g transform="translate(' + x + ',' + y + ')" opacity="0.8"';
+    if (kind === 'button')   // a pad
+        return at + ' fill="none" stroke="' + colour + '" stroke-width="' + n (2.2) + '">'
+             + '<rect x="' + n (2) + '" y="' + n (2) + '" width="' + n (20) + '" height="' + n (20) + '" rx="' + n (4.5) + '"/>'
+             + '<rect x="' + n (7.5) + '" y="' + n (7.5) + '" width="' + n (9) + '" height="' + n (9) + '" rx="' + n (2) + '" fill="' + colour + '" stroke="none"/></g>';
+    // a playlist: a list with a play triangle
+    return at + ' stroke="' + colour + '" stroke-width="' + n (2.6) + '" stroke-linecap="round" fill="' + colour + '">'
+         + '<line x1="' + n (2) + '" y1="' + n (4) + '" x2="' + n (16) + '" y2="' + n (4) + '"/>'
+         + '<line x1="' + n (2) + '" y1="' + n (11) + '" x2="' + n (16) + '" y2="' + n (11) + '"/>'
+         + '<line x1="' + n (2) + '" y1="' + n (18) + '" x2="' + n (9) + '" y2="' + n (18) + '"/>'
+         + '<path d="M' + n (13) + ' ' + n (14) + ' L' + n (23) + ' ' + n (19) + ' L' + n (13) + ' ' + n (24) + ' Z" stroke="none"/></g>';
+}
+
+function validColour (c) {
+    return /^#[0-9a-fA-F]{6}$/.test (String (c || '')) ? String (c) : null;
+}
+
+function rgb (hex) {
+    const h = String (hex).replace ('#', '');
+    return [ parseInt (h.substring (0, 2), 16) || 0, parseInt (h.substring (2, 4), 16) || 0, parseInt (h.substring (4, 6), 16) || 0 ];
+}
+
+function shade (hex, amount) {
+    const ground = [14, 16, 19], c = rgb (hex);
+    return '#' + c.map ((v, i) => Math.round (ground[i] + (v - ground[i]) * amount).toString (16).padStart (2, '0')).join ('');
+}
+
+function textOn (hex) {
+    const [r, g, b] = rgb (hex);
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.62 ? '#0e1013' : '#ffffff';
+}
+
+function key (background, border, parts, borderWidth) {
+    const w = borderWidth || 6;
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 144 144">'
+         + '<rect x="0" y="0" width="144" height="144" fill="' + background + '"/>'
+         + parts.join ('')
+         + '<rect x="' + (w / 2) + '" y="' + (w / 2) + '" width="' + (144 - w) + '" height="' + (144 - w) + '" rx="10" fill="none" stroke="' + border + '" stroke-width="' + w + '"/>'
+         + '</svg>';
+}
+
+function text (s, x, y, size, colour, bold, anchor, opacity) {
+    return '<text x="' + x + '" y="' + y + '" font-family="Segoe UI, -apple-system, Helvetica, Arial, sans-serif" font-size="' + size
+         + '" font-weight="' + (bold ? '700' : '400') + '" fill="' + colour + '" fill-opacity="' + (opacity || 1) + '" text-anchor="' + (anchor || 'middle') + '">'
+         + escape (s) + '</text>';
+}
+
+function lines (s, x, y, size, colour, maxLines, lineHeight) {
+    const perLine = Math.max (6, Math.floor (126 / (size * 0.56)));
+    const words = String (s).split (/\s+/).filter (w => w.length > 0);
+    const out = [];
+    let line = '';
+    for (const w of words) {
+        const candidate = line ? line + ' ' + w : w;
+        if (candidate.length <= perLine) {
+            line = candidate;
+            continue;
+        }
+        if (line)
+            out.push (line);
+        line = w.length > perLine ? w.substring (0, perLine) : w;
+    }
+    if (line)
+        out.push (line);
+    if (out.length > maxLines) {
+        out.length = maxLines;
+        out[maxLines - 1] = out[maxLines - 1].substring (0, perLine - 1) + '…';
+    }
+    return out.map ((l, i) => text (l, x, y + i * lineHeight, size, colour, true));
+}
+
+function escape (s) {
+    return String (s).replace (/&/g, '&amp;').replace (/</g, '&lt;').replace (/>/g, '&gt;').replace (/"/g, '&quot;');
+}
+
+function time (seconds) {
+    const s = Math.max (0, Math.ceil (seconds || 0));
+    return Math.floor (s / 60) + ':' + String (s % 60).padStart (2, '0');
+}
+
+function bankLetter (b) { return String.fromCharCode (65 + b); }
+
+function clamp (v, lo, hi) { return isNaN (v) ? lo : Math.max (lo, Math.min (hi, v)); }
+
+// ---- demo (a fake Stinger, for trying the page without one) ----
+
+function startDemo () {
+    const names = [ 'Walk-up: Jordan', 'Award swell', 'Welcome to stage', 'Drum roll', 'Applause', 'Big finish',
+                    'Intro bed', 'Sponsor sting', 'Break music', 'Countdown', 'Fanfare', 'Outro' ];
+    const colours = [ '#e5484d', '#f2a33a', '#3ccf7a', '#5aa9f0', '#a66cf0', '#f0d43a', '#36c5c5', '#ef6fb4', '#8b95a1', '#e5484d', '#f2a33a', '#3ccf7a' ];
+    state = { type: 'state', bank: 0, banks: [ 'Ceremony', 'Breaks', 'Spare' ], selfDestruct: false, anyPlaying: false,
+              cues: names.map ((n, i) => ({ id: i, bank: 0, slot: i, name: n, colour: colours[i], length: 20 + i * 7 })),
+              go: { next: 'Intro bed', looping: false, playlist: 0 }, playlists: [ { name: 'Walk-ins', next: 'Intro bed', looping: false } ],
+              layouts: {} };
+    state.cues[6].next = true;
+    setInterval (demoTick, 100);
+    drawAll();
+}
+
+function demoPress (action) {
+    const playing = state.cues.filter (c => c.playing);
+    if (action === 'stopAll') playing.forEach (c => c.playing = false);
+    else if (action === 'fadeAll') playing.forEach (c => c.stopping = true);
+    else if (action === 'selfDestruct') state.selfDestruct = ! state.selfDestruct;
+    else if (action === 'resetColours') state.cues.forEach (c => c.spent = false);
+    else if (action === 'bankNext') state.bank = (state.bank + 1) % state.banks.length;
+    else if (action === 'bankPrev') state.bank = (state.bank + state.banks.length - 1) % state.banks.length;
+    else if (action.startsWith ('bank')) state.bank = Math.min (state.banks.length - 1, parseInt (action.substring (4)) - 1);
+    else {
+        let cue = null;
+        if (action.startsWith ('slot')) cue = state.cues.find (c => c.bank === state.bank && c.slot === parseInt (action.substring (4)) - 1);
+        else if (action.startsWith ('cue:')) cue = state.cues.find (c => c.id === parseInt (action.substring (4)));
+        else if (action.startsWith ('go') || action === 'fadeNext') cue = state.cues.find (c => c.next);
+        if (! cue) return;
+        if (cue.playing) { cue.stopping = true; return; }
+        state.cues.forEach (c => { if (c.playing) c.stopping = true; });
+        Object.assign (cue, { playing: true, stopping: false, started: Date.now(), fadeLeft: 0 });
+    }
+    drawAll();
+}
+
+function demoTick () {
+    let newest = null;
+    for (const c of state.cues) {
+        if (! c.playing) continue;
+        const t = (Date.now() - c.started) / 1000;
+        if (c.stopping) c.fadeLeft = (c.fadeLeft || 10) - 1;
+        if (t >= c.length || (c.stopping && c.fadeLeft <= 0)) {
+            Object.assign (c, { playing: false, stopping: false, fadeLeft: 0 });
+            if (state.selfDestruct) c.spent = true;
+            continue;
+        }
+        c.remaining = Math.ceil (c.length - t);
+        c.progress = t / c.length;
+        if (! newest || c.started > newest.started) newest = c;
+    }
+    state.anyPlaying = state.cues.some (c => c.playing);
+    state.now = newest ? { name: newest.name, colour: newest.colour, progress: newest.progress, stopping: newest.stopping,
+                           remaining: newest.length - (Date.now() - newest.started) / 1000 < 10 ? Math.ceil ((newest.length - (Date.now() - newest.started) / 1000) * 10) / 10 : newest.remaining,
+                           others: state.cues.filter (c => c.playing).length - 1 } : undefined;
+    drawAll();
+}
+
+build();
+connect();
+</script>
+</body>
+</html>

@@ -285,6 +285,10 @@ void CueGrid::showMenu (int id)
     m.addSubMenu ("Colour", colours);
     m.addItem (5, "Reset colour (Self Destruct)", cue.spent);
     m.addSeparator();
+    // what a press does: play once and stop (default), or loop until pressed again / another button on its output / Stop all
+    m.addItem (6, "Play once", ! empty, ! cue.loop);
+    m.addItem (7, cue.hasLoopPoints() ? "Loop (by its loop points)" : "Loop (the whole clip)", ! empty, cue.loop);
+    m.addSeparator();
     m.addItem (2, "Clear button", ! empty);
     juce::Component::SafePointer<CueGrid> safe (this);
     m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), [safe, id] (int result)
@@ -300,6 +304,11 @@ void CueGrid::showMenu (int id)
             c.addToPlaylist (result - 1000, id);
         else if (result == 5)
             c.resetColour (id);
+        else if (result == 6 || result == 7)
+        {
+            c.getShow().cue (id).loop = result == 7;
+            c.cueChanged (id);
+        }
         else if (result == 4)
             Look::showColourPicker (safe->localAreaToGlobal (safe->slotBounds (Show::slotOf (id)).toNearestInt()), c, id);
         else if (result >= 100)

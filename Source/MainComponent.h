@@ -9,6 +9,7 @@
 #include "StreamDeckServer.h"
 #include "Downloader.h"
 #include "ImportPanel.h"
+#include "Remote.h"
 
 /** The main window's content: top bar (banks, file, audio), button grid, now playing, cue editor. */
 class MainComponent : public juce::Component,
@@ -34,6 +35,7 @@ public:
 
     ControlSurface& getSurface() { return surface; }
     StreamDeckServer& getStreamDeck() { return streamDeck; }
+    Remote& getRemote() { return remote; }
     std::function<void()> onTitleChanged;
     juce::String windowTitle() const;
 
@@ -48,6 +50,7 @@ private:
     juce::PropertiesFile& settings;
     ControlSurface surface;
     StreamDeckServer streamDeck;
+    Remote remote;
     CueGrid grid;
     PlaylistPanel playlist;
     NowPlaying nowPlaying;
@@ -88,6 +91,8 @@ private:
     void perform (const juce::String& action);
     void showControls();
     std::unique_ptr<juce::DocumentWindow> controlsWindow;
+    void showRemote();
+    std::unique_ptr<juce::DocumentWindow> remoteWindow;
     juce::Label showName, deviceInfo;
     std::unique_ptr<juce::FileChooser> chooser;
     juce::TooltipWindow tooltips { this };

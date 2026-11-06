@@ -204,14 +204,17 @@ bool ShowController::makePlan (const PlaylistEntry& entry, int tag, PlayPlan& pl
 {
     const int cueId = entry.cueId;
     auto audio = getAudio (cueId);
-    if (audio == nullptr || ! show.isValid (cueId) || ! PlayPlan::make (show.cue (cueId), *audio, cueId, plan))
+    if (audio == nullptr || ! show.isValid (cueId))
+        return false;
+    // Loop until GO: the song's loop points if it has them (GO then plays on through Loop Out to the Out point)
+    const bool made = entry.transition == Transition::loopUntil ? PlayPlan::makeLoop (show.cue (cueId), *audio, cueId, plan)
+                                                                : PlayPlan::make (show.cue (cueId), *audio, cueId, plan);
+    if (! made)
         return false;
     plan.tag = tag;
     if (auto it = tagPlaylist.find (tag); it != tagPlaylist.end())
         plan.playlist = it->second;
     attachFx (plan);
-    if (entry.transition == Transition::loopUntil)
-        plan.loop = true;
     return true;
 }
 

@@ -161,6 +161,14 @@ private:
                 panel.showLinksTab (file.getFileName().containsIgnoreCase ("links"));
                 image = panel.createComponentSnapshot (panel.getLocalBounds());
             }
+            else if (file.getFileName().containsIgnoreCase ("remote"))   // *remote*: the Wi-Fi Remote window (*remoteon*: turned on)
+            {
+                auto& remote = app.snapshotContent->getRemote();
+                remote.setOn (file.getFileName().containsIgnoreCase ("remoteon"));
+                RemotePanel panel (remote);
+                image = panel.createComponentSnapshot (panel.getLocalBounds());
+                remote.setOn (false);
+            }
             else if (file.getFileName().containsIgnoreCase ("credits"))   // *credits*: the credits window
                 image = MainComponent::creditsImage();
             else

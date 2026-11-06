@@ -100,6 +100,40 @@ std::vector<Segment> Cue::baseSegments (double fileSeconds) const
     return result;
 }
 
+void Cue::loopSections (double fileSeconds, std::vector<Segment>& intro, std::vector<Segment>& body, std::vector<Segment>& outro) const
+{
+    intro.clear();
+    body.clear();
+    outro.clear();
+    if (! hasLoopPoints())
+        return;
+    auto sorted = cuts;
+    std::sort (sorted.begin(), sorted.end(), [] (auto a, auto b) { return a.getStart() < b.getStart(); });
+    // from..to with the cuts taken out
+    auto add = [&] (double from, double to, std::vector<Segment>& into)
+    {
+        from = juce::jlimit (0.0, fileSeconds, from);
+        to = juce::jlimit (from, fileSeconds, to);
+        double pos = from;
+        for (auto c : sorted)
+        {
+            if (c.getEnd() <= pos || c.getStart() >= to)
+                continue;
+            if (c.getStart() > pos)
+                into.push_back ({ pos, c.getStart() });
+            pos = std::max (pos, c.getEnd());
+        }
+        if (to > pos)
+            into.push_back ({ pos, to });
+    };
+    const double in = juce::jlimit (0.0, fileSeconds, trimIn);
+    const double out = trimOut < 0.0 ? fileSeconds : juce::jlimit (in, fileSeconds, trimOut);
+    // the intro runs from In to where the loop takes over: Loop In, or (In inside / after the loop start) Loop Out
+    add (in, loopIn >= in ? loopIn : loopOut, intro);
+    add (loopIn, loopOut, body);
+    add (loopOut, out, outro);
+}
+
 double Cue::playLength (double fileSeconds) const
 {
     double total = 0.0;
@@ -181,6 +215,13 @@ juce::var Cue::toVar() const
     o->setProperty ("outStereo", output.stereo);
     o->setProperty ("fadeOthers", fadeOthers);
     o->setProperty ("loop", loop);
+    if (hasLoopPoints())
+    {
+        o->setProperty ("loopIn", loopIn);
+        o->setProperty ("loopOut", loopOut);
+    }
+    if (loopFromLoopIn)
+        o->setProperty ("loopFromLoopIn", true);
     o->setProperty ("hotkey", hotkey);
     o->setProperty ("midi", midi.toVar());
     if (hasPlugins())
@@ -238,6 +279,11 @@ Cue Cue::fromVar (const juce::var& v)
     c.output.stereo = (bool) v.getProperty ("outStereo", true);
     c.fadeOthers = (bool) v.getProperty ("fadeOthers", false);
     c.loop = (bool) v.getProperty ("loop", false);
+    c.loopIn = (double) v.getProperty ("loopIn", -1.0);
+    c.loopOut = (double) v.getProperty ("loopOut", -1.0);
+    if (! c.hasLoopPoints())
+        c.loopIn = c.loopOut = -1.0;
+    c.loopFromLoopIn = (bool) v.getProperty ("loopFromLoopIn", false);
     c.hotkey = v.getProperty ("hotkey", {}).toString();
     c.midi = MidiTrigger::fromVar (v.getProperty ("midi", {}));
     if (auto* list = v.getProperty ("plugins", {}).getArray())

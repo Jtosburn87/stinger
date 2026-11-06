@@ -1,8 +1,46 @@
 #include "PlaybackEngine.h"
 #include <cmath>
 
+namespace
+{
+    /** Puts file sections on the end of the plan's timeline (joining sections that carry straight on); returns the new end. */
+    juce::int64 addSegments (PlayPlan& plan, const std::vector<Segment>& sections, double sr, juce::int64 total, juce::int64 timeline)
+    {
+        for (auto& s : sections)
+        {
+            const auto start = juce::jlimit<juce::int64> (0, total, (juce::int64) std::llround (s.start * sr));
+            const auto end = juce::jlimit<juce::int64> (start, total, (juce::int64) std::llround (s.end * sr));
+            if (end <= start)
+                continue;
+            if (plan.numSegments > 0 && plan.segments[(size_t) plan.numSegments - 1].end == start)
+                plan.segments[(size_t) plan.numSegments - 1].end = end;   // no join (and no join ramp) needed
+            else if (plan.numSegments < PlayPlan::maxSegments)
+                plan.segments[(size_t) plan.numSegments++] = { start, end, timeline };
+            else
+                break;
+            timeline += end - start;
+        }
+        return timeline;
+    }
+
+    void setCommon (PlayPlan& plan, const Cue& cue, double sr)
+    {
+        plan.stopFadeLength = (juce::int64) std::llround (cue.stopFade.seconds * sr);
+        plan.fadeInCurve = cue.fadeIn.curve;
+        plan.fadeOutCurve = cue.fadeOut.curve;
+        plan.stopFadeCurve = cue.stopFade.curve;
+        plan.gain = juce::Decibels::decibelsToGain (juce::jlimit (Cue::minLevelDb, Cue::maxLevelDb, cue.levelDb));
+        plan.pan = juce::jlimit (-1.0f, 1.0f, cue.pan);
+        plan.output = cue.output;
+        plan.fadeOthers = cue.fadeOthers;
+    }
+}
+
 bool PlayPlan::make (const Cue& cue, const CueAudio& audio, int cueId, PlayPlan& plan)
 {
+    if (cue.loop && cue.hasLoopPoints())
+        return makeLoop (cue, audio, cueId, plan);
+
     plan = PlayPlan();
     const double sr = audio.sampleRate;
     const double fileSeconds = audio.seconds();
@@ -12,18 +50,7 @@ bool PlayPlan::make (const Cue& cue, const CueAudio& audio, int cueId, PlayPlan&
 
     plan.audio = &audio;
     plan.cueId = cueId;
-    juce::int64 timeline = 0;
-    for (auto& s : cue.segments (fileSeconds))
-    {
-        if (plan.numSegments == maxSegments)
-            break;
-        const auto start = juce::jlimit<juce::int64> (0, total, (juce::int64) std::llround (s.start * sr));
-        const auto end = juce::jlimit<juce::int64> (start, total, (juce::int64) std::llround (s.end * sr));
-        if (end <= start)
-            continue;
-        plan.segments[(size_t) plan.numSegments++] = { start, end, timeline };
-        timeline += end - start;
-    }
+    const auto timeline = addSegments (plan, cue.segments (fileSeconds), sr, total, 0);
     if (timeline <= 0)
         return false;
 
@@ -31,15 +58,49 @@ bool PlayPlan::make (const Cue& cue, const CueAudio& audio, int cueId, PlayPlan&
     plan.startAt = 0;
     plan.fadeInLength = std::min (timeline, (juce::int64) std::llround (cue.fadeIn.seconds * sr));
     plan.fadeOutLength = std::min (timeline, (juce::int64) std::llround (cue.fadeOut.seconds * sr));
-    plan.stopFadeLength = (juce::int64) std::llround (cue.stopFade.seconds * sr);
-    plan.fadeInCurve = cue.fadeIn.curve;
-    plan.fadeOutCurve = cue.fadeOut.curve;
-    plan.stopFadeCurve = cue.stopFade.curve;
-    plan.gain = juce::Decibels::decibelsToGain (juce::jlimit (Cue::minLevelDb, Cue::maxLevelDb, cue.levelDb));
-    plan.pan = juce::jlimit (-1.0f, 1.0f, cue.pan);
-    plan.output = cue.output;
+    setCommon (plan, cue, sr);
     plan.loop = cue.loop;
-    plan.fadeOthers = cue.fadeOthers;
+    return true;
+}
+
+bool PlayPlan::makeLoop (const Cue& cue, const CueAudio& audio, int cueId, PlayPlan& plan)
+{
+    const double sr = audio.sampleRate;
+    const double fileSeconds = audio.seconds();
+    const juce::int64 total = audio.samples.getNumSamples();
+    std::vector<Segment> intro, body, outro;
+    cue.loopSections (fileSeconds, intro, body, outro);
+    double bodySeconds = 0.0;
+    for (auto& s : body)
+        bodySeconds += s.length();
+    if (sr <= 0.0 || total <= 0 || bodySeconds * sr < 64.0)
+    {
+        // no loop points (or nothing left of the loop after the cuts): the whole clip loops
+        Cue whole = cue;
+        whole.loop = true;
+        whole.loopIn = whole.loopOut = -1.0;
+        return make (whole, audio, cueId, plan);
+    }
+
+    plan = PlayPlan();
+    plan.audio = &audio;
+    plan.cueId = cueId;
+    const auto introEnd = addSegments (plan, intro, sr, total, 0);
+    const auto bodyEnd = addSegments (plan, body, sr, total, introEnd);
+    const auto end = addSegments (plan, outro, sr, total, bodyEnd);
+    if (bodyEnd <= introEnd)
+        return false;
+
+    plan.length = end;
+    plan.loop = true;
+    plan.loopStart = introEnd;
+    plan.loopEnd = bodyEnd;
+    plan.startAt = cue.loopFromLoopIn ? introEnd : 0;
+    plan.loopRestart = plan.startAt;
+    // the clip's fades belong to its own start and end: fade in over the intro, fade out over the outro
+    plan.fadeInLength = cue.loopFromLoopIn ? 0 : std::min (introEnd, (juce::int64) std::llround (cue.fadeIn.seconds * sr));
+    plan.fadeOutLength = std::min (end - bodyEnd, (juce::int64) std::llround (cue.fadeOut.seconds * sr));
+    setCommon (plan, cue, sr);
     return true;
 }
 
@@ -365,12 +426,17 @@ void PlaybackEngine::seekVoice (int voice, juce::int64 position)
     push (c);
 }
 
-void PlaybackEngine::setVoiceLoop (int voice, bool loop)
+void PlaybackEngine::setVoiceLoop (int voice, bool loop, const PlayPlan* loopPlan)
 {
     Command c;
     c.type = Command::setLoop;
     c.id = voice;
     c.fade = loop;
+    if (loop && loopPlan != nullptr)
+    {
+        c.plan = *loopPlan;
+        c.overlap = 1;   // has a loop plan
+    }
     push (c);
 }
 
@@ -435,6 +501,7 @@ std::vector<PlaybackEngine::VoiceInfo> PlaybackEngine::getVoices() const
         const auto position = s.position.load(), length = s.length.load();
         info.position = std::min (position, length) / sr;
         info.length = length / sr;
+        info.filePosition = s.filePosition.load() / sr;
         info.stopping = s.stopping.load();
         info.hasFollow = s.hasFollow.load();
         info.looping = s.looping.load();
@@ -551,9 +618,10 @@ void PlaybackEngine::handleCommands()
                     break;
                 case Command::releaseLoop:
                     for (auto& v : voices)
-                        if (v.active && c.id != 0 && v.plan.tag == c.id && v.plan.loop)
+                        if (v.active && c.id != 0 && v.plan.tag == c.id && (v.plan.loop || v.hasLoopPlan))
                         {
                             v.plan.loop = false;
+                            v.hasLoopPlan = false;
                             v.skipFadeOut = v.pos >= v.plan.length - v.plan.fadeOutLength;
                         }
                     break;
@@ -575,10 +643,25 @@ void PlaybackEngine::handleCommands()
                     break;
                 case Command::setLoop:
                     if (c.id >= 0 && c.id < maxVoices)
-                        if (auto& v = voices[(size_t) c.id]; v.active && v.plan.loop != c.fade)
+                        if (auto& v = voices[(size_t) c.id]; v.active)
                         {
-                            v.plan.loop = c.fade;
-                            v.skipFadeOut = ! c.fade && v.pos >= v.plan.length - v.plan.fadeOutLength;
+                            if (! c.fade)
+                            {
+                                v.hasLoopPlan = false;
+                                if (v.plan.loop)
+                                {
+                                    v.plan.loop = false;
+                                    v.skipFadeOut = v.pos >= v.plan.length - v.plan.fadeOutLength;
+                                }
+                            }
+                            else if (c.overlap == 1 && ! v.plan.loop && v.plan.loopEnd < 0 && c.plan.audio == v.plan.audio)
+                                switchToLoop (v, c.plan);   // playing normally: by the loop points from here on
+                            else
+                            {
+                                v.plan.loop = true;
+                                if (v.plan.loopEnd > 0)
+                                    v.plan.loopRestart = v.plan.loopStart;   // past Loop Out: the Out point goes to Loop In
+                            }
                         }
                     break;
                 case Command::swapCues:
@@ -616,6 +699,58 @@ void PlaybackEngine::handleCommands()
     run (scope.startIndex2, scope.blockSize2);
 }
 
+void PlaybackEngine::switchToLoop (Voice& v, const PlayPlan& loopPlan)
+{
+    PlayPlan next = loopPlan;
+    next.cueId = v.plan.cueId;
+    next.tag = v.plan.tag;
+    next.playlist = v.plan.playlist;
+    next.preview = v.plan.preview;
+    next.output = v.plan.output;
+    next.fx = v.plan.fx;
+    next.entryFade = 0;
+    next.loopRestart = next.loopStart;   // reaching the Out point (past Loop Out) goes to Loop In, not In
+
+    // the same sample of the file on the loop's timeline: in the loop if it's there, else the intro / outro
+    juce::int64 mapped = -1;
+    if (v.pos < v.plan.length && v.plan.numSegments > 0)
+    {
+        const auto& seg = v.plan.segments[(size_t) juce::jlimit (0, v.plan.numSegments - 1, v.segment)];
+        const auto file = seg.start + (v.pos - seg.timelineStart);
+        for (int pass = 0; pass < 2 && mapped < 0; ++pass)
+            for (int i = 0; i < next.numSegments; ++i)
+            {
+                const auto& s = next.segments[(size_t) i];
+                if (file < s.start || file >= s.end)
+                    continue;
+                const auto t = s.timelineStart + (file - s.start);
+                if (pass == 1 || (t >= next.loopStart && t < next.loopEnd))
+                {
+                    mapped = t;
+                    break;
+                }
+            }
+    }
+    if (mapped < 0)
+    {
+        // somewhere the loop's timeline doesn't have (a pasted copy, waiting): at the end, straight to Loop In
+        next.startAt = next.loopStart;
+        v.loopPlan = next;
+        v.hasLoopPlan = true;
+        return;
+    }
+    v.plan = next;
+    v.hasLoopPlan = false;
+    v.pos = mapped;
+    v.segment = 0;
+    while (v.segment < v.plan.numSegments - 1 && v.pos >= v.plan.segments[(size_t) v.segment + 1].timelineStart)
+        ++v.segment;
+    v.firstPass = false;   // no fade in again
+    v.skipFadeOut = false;
+    if (v.hasFollow)
+        v.followAt = v.plan.length - v.followOverlap;
+}
+
 PlaybackEngine::Voice* PlaybackEngine::startVoice (const PlayPlan& plan, int blockDelay)
 {
     if (plan.audio == nullptr || plan.length <= 0)
@@ -639,6 +774,20 @@ PlaybackEngine::Voice* PlaybackEngine::startVoice (const PlayPlan& plan, int blo
                 continue;   // no channel in common
             v.hasFollow = false;
             stopOver (v, takeOverFade, FadeCurve::linear);
+        }
+    }
+
+    if (plan.stopsLoops)
+    {
+        // a looping button plays until another button on one of its outputs is pressed (whatever the playback mode)
+        const int first = plan.output.firstChannel, last = first + plan.output.numChannels();
+        for (auto& v : voices)
+        {
+            if (! v.active || v.stopping || ! (v.plan.loop || v.hasLoopPlan) || v.plan.tag != 0 || v.plan.preview)
+                continue;
+            const int vFirst = v.plan.output.firstChannel, vLast = vFirst + v.plan.output.numChannels();
+            if (vLast > first && vFirst < last)
+                beginStop (v, true);   // with its stop fade
         }
     }
 
@@ -680,6 +829,7 @@ PlaybackEngine::Voice* PlaybackEngine::startVoice (const PlayPlan& plan, int blo
     v.skipFadeOut = false;
     v.seekTo = -1;
     v.seekLeft = 0;
+    v.hasLoopPlan = false;
     return &v;
 }
 
@@ -783,6 +933,35 @@ void PlaybackEngine::render (Voice& v, float* const* outputs, int numOutputChann
             v.segment = 0;
             v.startRamp = 0;
         }
+        if (p.loop && p.loopEnd > 0 && v.pos == p.loopEnd)
+        {
+            // loop points: Loop Out jumps back to Loop In
+            v.pos = p.loopStart;
+            v.segment = 0;
+            v.firstPass = false;
+            v.startRamp = 0;
+        }
+        if (v.pos >= p.length && v.hasLoopPlan && ! v.stopping)
+        {
+            // Loop was pressed while it played normally: at the end it carries on as the loop (playing the same way)
+            PlayPlan next = v.loopPlan;
+            next.cueId = p.cueId;
+            next.tag = p.tag;
+            next.playlist = p.playlist;
+            next.preview = p.preview;
+            next.output = p.output;
+            next.fx = p.fx;
+            next.entryFade = 0;
+            v.plan = next;   // (p refers to v.plan)
+            v.hasLoopPlan = false;
+            v.pos = p.startAt;
+            v.segment = 0;
+            v.firstPass = false;
+            v.startRamp = 0;
+            v.skipFadeOut = false;
+            if (v.hasFollow)
+                v.followAt = p.length - v.followOverlap;
+        }
         if (v.pos >= p.length)
         {
             if (! p.loop && v.hasFollow && ! v.stopping)
@@ -798,9 +977,11 @@ void PlaybackEngine::render (Voice& v, float* const* outputs, int numOutputChann
                 v.active = false;
                 return;
             }
-            v.pos = 0;
+            v.pos = p.loopEnd > 0 ? p.loopRestart : 0;   // loop points, turned on again after Loop Out: from In (or Loop In)
             v.segment = 0;
             v.firstPass = false;
+            if (v.pos > 0)
+                v.startRamp = 0;
         }
         while (v.segment < p.numSegments - 1 && v.pos >= p.segments[(size_t) v.segment + 1].timelineStart)
             ++v.segment;
@@ -817,8 +998,10 @@ void PlaybackEngine::render (Voice& v, float* const* outputs, int numOutputChann
             env *= fadeGain (p.fadeOutCurve, (float) (p.length - v.pos) / (float) p.fadeOutLength);
         if ((v.segment > 0 || ! v.firstPass) && offset < joinRamp)
             env *= (float) offset / (float) joinRamp;
-        if ((v.segment < p.numSegments - 1 || p.loop) && segLength - offset < joinRamp)
+        if ((v.segment < p.numSegments - 1 || p.loop || v.hasLoopPlan) && segLength - offset < joinRamp)
             env *= (float) (segLength - offset) / (float) joinRamp;
+        if (p.loop && p.loopEnd > 0 && v.pos < p.loopEnd && p.loopEnd - v.pos < joinRamp)
+            env *= (float) (p.loopEnd - v.pos) / (float) joinRamp;   // into the jump back to Loop In
         if (v.firstPass && p.entryFade > 0 && v.pos - p.startAt < p.entryFade)
             env *= fadeGain (FadeCurve::sCurve, (float) (v.pos - p.startAt) / (float) p.entryFade);
         if (v.startRamp < declick)
@@ -870,7 +1053,14 @@ void PlaybackEngine::publishStatus()
         s.tag.store (v.plan.tag);
         s.preview.store (v.plan.preview);
         s.hasFollow.store (v.active && v.hasFollow);
-        s.looping.store (v.active && v.plan.loop);
+        s.looping.store (v.active && (v.plan.loop || v.hasLoopPlan));
+        juce::int64 filePos = 0;
+        if (v.active && v.plan.numSegments > 0)
+        {
+            const auto& seg = v.plan.segments[(size_t) juce::jlimit (0, v.plan.numSegments - 1, v.segment)];
+            filePos = seg.start + juce::jlimit<juce::int64> (0, seg.end - seg.start, v.pos - seg.timelineStart);
+        }
+        s.filePosition.store (filePos);
         s.followAt.store (v.followAt);
         s.audio.store (v.active ? v.plan.audio : nullptr);
         s.fx.store (v.active ? v.plan.fx : nullptr);

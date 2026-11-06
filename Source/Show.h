@@ -106,6 +106,9 @@ public:
     /** Button press: plays the cue, or fades it out if it's already playing. */
     void trigger (int id);
     void play (int id);
+    /** Now Playing's Loop button. On: a song with loop points playing normally carries on by them from where it is
+        (Loop Out jumps to Loop In; past Loop Out: the Out point goes to Loop In). Off: it plays on to the Out point. */
+    void setVoiceLoop (int voice, bool loop);
 
     std::shared_ptr<CueAudio> getAudio (int id) const;
     bool isLoading (int id) const { return loading.count (id) > 0; }

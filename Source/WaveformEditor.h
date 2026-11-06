@@ -41,6 +41,10 @@ public:
     bool splitAtCursor();
     bool canSplitAtCursor();
 
+    /** Loop points: the selection; with none, from the dashed cursor (else In) to Out. Drag the markers to change them. */
+    bool setLoopPoints();
+    void clearLoopPoints();
+
     /** Lists the device outputs for Preview (call when the audio device changes). */
     void fillPreviewOutputs();
 
@@ -57,6 +61,8 @@ public:
         std::vector<juce::Range<double>> cuts;
         std::vector<Paste> pastes;
         Fade fadeIn, fadeOut;
+        double loopIn = -1.0, loopOut = -1.0;
+        bool loopFromLoopIn = false;
         bool operator== (const Edits& o) const;
         static Edits of (const Cue& c);
         void applyTo (Cue& c) const;
@@ -136,7 +142,9 @@ private:
     std::unique_ptr<NavBar> nav;
     juce::TextButton hOut { "H-" }, hIn { "H+" }, vOut { "V-" }, vIn { "V+" }, fitButton { "Fit" },
                      undoButton { "Undo" }, redoButton { "Redo" },
-                     cutButton { "Cut" }, copyButton { "Copy" }, pasteButton { "Paste" }, splitButton { "Split" };
+                     cutButton { "Cut" }, copyButton { "Copy" }, pasteButton { "Paste" }, splitButton { "Split" },
+                     setLoopButton { "Set Loop Points" }, clearLoopButton { "Clear Loop" };
+    juce::ComboBox loopStart;   // a looping play starts at: In (intro) / Loop In
     TransportButton playFromStart { TransportButton::Icon::playFromStart }, playFromCursor { TransportButton::Icon::play },
                     stopButton { TransportButton::Icon::stop };
     bool previewFromCursor = false;   // which play button started the preview

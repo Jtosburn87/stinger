@@ -100,9 +100,15 @@ target_sources(Stinger PRIVATE
     Source/ControlSurface.cpp
     Source/ControlsWindow.cpp
     Source/Look.cpp
-    Source/ImportPanel.cpp)
+    Source/ImportPanel.cpp
+    Source/Remote.cpp
+    third_party/qrcodegen/qrcodegen.cpp)
+
+# The Wi-Fi remote's web page, served by Stinger itself.
+juce_add_binary_data(StingerRemoteData SOURCES remote/remote.html)
 
 target_link_libraries(Stinger PRIVATE
+    StingerRemoteData
     StingerCore
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags

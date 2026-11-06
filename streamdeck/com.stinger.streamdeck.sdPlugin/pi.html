@@ -10,6 +10,9 @@
   select { flex: 1; min-width: 0; height: 26px; background: #3d3d3d; color: #d8d8d8; border: 1px solid #555; border-radius: 3px; padding: 0 6px; font: inherit; }
   .hint { color: #969696; margin: 10px 0 0 102px; line-height: 1.4; }
   .hidden { display: none; }
+  input[type=color] { width: 48px; height: 26px; padding: 0 2px; background: #3d3d3d; border: 1px solid #555; border-radius: 3px; }
+  button { margin-left: 8px; height: 26px; background: #3d3d3d; color: #d8d8d8; border: 1px solid #555; border-radius: 3px; font: inherit; padding: 0 10px; }
+  #titleHint { margin-left: 10px; }
 </style>
 </head>
 <body>
@@ -45,9 +48,17 @@
       <label for="playlist">Plays</label>
       <select id="playlist"></select>
     </div>
+    <div class="row">
+      <label for="keyColour">Key colour</label>
+      <input type="color" id="keyColour" value="#2f8f5b">
+      <button id="defaultColour" type="button">Default</button>
+    </div>
     <p class="hint">"Selected playlist" follows the playlist box last clicked in Stinger (the one Space plays).
       Pick a playlist to make this key always play that one. Names show while Stinger is running.</p>
   </div>
+
+  <p class="hint" id="titleHint">Your own text: type it in the Title box above. Its T menu sets the size, colour, font and
+    position (top / middle / bottom). Leave it empty for the key's own label.</p>
 
 <script>
   let socket = null, context = null, settings = {};
@@ -118,7 +129,7 @@
       bank.value = settings.bank || '0';
       position.value = settings.position || '1';
       const update = () => {
-        settings = { mode: mode.value, bank: bank.value, position: position.value };
+        settings = Object.assign ({}, settings, { mode: mode.value, bank: bank.value, position: position.value });
         document.getElementById ('bankRow').classList.toggle ('hidden', mode.value !== 'fixed');
         save();
       };
@@ -130,12 +141,23 @@
       const playlist = document.getElementById ('playlist');
       fill (playlist, [['selected', 'Selected playlist'], ...Array.from ({ length: 8 }, (_, p) => [String (p), 'Playlist ' + (p + 1)])]);
       playlist.value = settings.playlist || 'selected';
-      playlist.onchange = () => { settings = { playlist: playlist.value }; save(); };
+      playlist.onchange = () => { settings = Object.assign ({}, settings, { playlist: playlist.value }); save(); };
+      // GO keys can be any colour (the text turns black or white to stay readable)
+      const colour = document.getElementById ('keyColour');
+      colour.value = settings.keyColour || '#2f8f5b';
+      colour.oninput = () => { settings = Object.assign ({}, settings, { keyColour: colour.value }); save(); };
+      document.getElementById ('defaultColour').onclick = () =>
+      {
+        colour.value = '#2f8f5b';
+        settings = Object.assign ({}, settings);
+        delete settings.keyColour;
+        save();
+      };
     } else {
       const bank = document.getElementById ('bank');
       fill (bank, [['next', 'Next bank'], ['previous', 'Previous bank'], ...letters()]);
       bank.value = settings.bank || 'next';
-      bank.onchange = () => { settings = { bank: bank.value }; save(); };
+      bank.onchange = () => { settings = Object.assign ({}, settings, { bank: bank.value }); save(); };
       if (! settings.bank)
         bank.onchange();
     }

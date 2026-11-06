@@ -474,6 +474,119 @@ static void testSeekAndLoop()
     out.run (e, 2);
 }
 
+static void testLoopPoints()
+{
+    std::puts ("Loop points");
+    PlaybackEngine e;
+    e.prepareForTest (rate, 2);
+    Outputs out (2);
+    // the sample value is its own position in seconds, so the output tells where in the file playback is
+    auto ramp = makeAudio (1, 4.0, [] (int, int i) { return (float) i / (float) rate; });
+    auto filePos = [&e] { const auto v = e.getVoices(); return v.empty() ? -1.0 : v.front().filePosition; };
+
+    Cue c = monoOut (0);
+    c.trimIn = 0.5;
+    c.trimOut = 3.5;
+    c.loopIn = 1.0;
+    c.loopOut = 2.0;
+    c.loop = true;
+    PlayPlan p;
+    check (PlayPlan::make (c, *ramp, 1, p) && p.loop && p.loopStart == (juce::int64) (0.5 * rate) && p.loopEnd == (juce::int64) (1.5 * rate)
+           && p.length == (juce::int64) (3.0 * rate) && p.numSegments == 1,
+           "a Loop button with loop points: intro + loop + outro on one timeline (no joins where it carries straight on)");
+
+    e.play (p);
+    out.run (e, 20);
+    check (std::abs (filePos() - 0.7) < 0.015, "starts at In (the part before Loop In is an intro)");
+    out.run (e, 140);   // 1.6 s in: past Loop Out (after 1.5 s), back to Loop In
+    check (std::abs (filePos() - 1.1) < 0.015 && e.getVoices().front().looping, "Loop Out jumps back to Loop In");
+    e.setVoiceLoop (0, false);
+    out.run (e, 60);
+    check (std::abs (filePos() - 1.7) < 0.015, "Loop off: plays on through the loop...");
+    out.run (e, 100);
+    check (std::abs (filePos() - 2.7) < 0.015, "...past Loop Out without jumping back (the outro)");
+    out.run (e, 90);
+    check (! e.isCuePlaying (1), "and stops at the Out point");
+
+    // loop start option: straight at Loop In
+    c.loopFromLoopIn = true;
+    PlayPlan::make (c, *ramp, 1, p);
+    e.play (p);
+    out.run (e, 10);
+    check (std::abs (filePos() - 1.1) < 0.015, "\"Loop starts at Loop In\": no intro");
+    e.stopAll (false);
+    out.run (e, 2);
+    c.loopFromLoopIn = false;
+
+    // played normally, then Loop pressed (Now Playing): by the loop points from where it is
+    Cue once = c;
+    once.loop = false;
+    PlayPlan normal, loopPlan;
+    PlayPlan::make (once, *ramp, 2, normal);
+    check (! normal.loop && normal.loopEnd < 0, "Play once: plays In to Out");
+    PlayPlan::makeLoop (once, *ramp, 2, loopPlan);
+    e.play (normal);
+    out.run (e, 30);    // file 0.8, before the loop
+    e.setVoiceLoop (0, true, &loopPlan);
+    out.run (e, 100);
+    check (std::abs (filePos() - 1.8) < 0.015 && e.getVoices().front().looping, "Loop pressed while playing: carries on from the same place");
+    out.run (e, 40);    // past Loop Out (2.0)
+    check (std::abs (filePos() - 1.2) < 0.015, "Loop Out jumps back to Loop In (no restart at In)");
+    e.stopAll (false);
+    out.run (e, 2);
+
+    e.play (normal);
+    out.run (e, 200);   // file 2.5: already past Loop Out
+    e.setVoiceLoop (0, true, &loopPlan);
+    out.run (e, 50);
+    check (std::abs (filePos() - 3.0) < 0.015 && e.getVoices().front().looping, "pressed after Loop Out: plays on to the Out point");
+    out.run (e, 70);    // 0.2 s past Out
+    check (std::abs (filePos() - 1.2) < 0.015, "then goes to Loop In");
+    e.stopAll (false);
+    out.run (e, 2);
+
+    // loop points anywhere: before the In point
+    Cue early = c;
+    early.loopIn = 0.1;
+    early.loopOut = 0.4;
+    PlayPlan::make (early, *ramp, 3, p);
+    e.play (p);
+    out.run (e, 5);
+    check (std::abs (filePos() - 0.15) < 0.015, "loop points before In: the loop starts straight away");
+    out.run (e, 30);
+    check (std::abs (filePos() - 0.15) < 0.015, "and goes round");
+    e.stopAll (false);
+    out.run (e, 2);
+
+    // no loop points: the whole clip loops (as before)
+    Cue whole = c;
+    whole.loopIn = whole.loopOut = -1.0;
+    PlayPlan::make (whole, *ramp, 4, p);
+    check (p.loop && p.loopEnd < 0 && p.length == (juce::int64) (3.0 * rate), "no loop points: the whole clip loops");
+
+    // a looping button stops when another button on its output is pressed, in every playback mode
+    ShowController sc (e);
+    sc.setPlaybackMode (PlaybackMode::overlap);
+    sc.getShow().cue (0) = c;
+    sc.getShow().cue (1) = monoOut (0);
+    sc.getShow().cue (2) = monoOut (1);
+    for (int i = 0; i < 3; ++i)
+        sc.setAudioForTest (i, ramp);
+    sc.play (0);
+    out.run (e, 10);
+    sc.play (2);
+    out.run (e, 10);
+    check (e.isCuePlaying (0) && e.isCuePlaying (2), "overlap: a button on another output leaves the loop playing");
+    sc.play (1);
+    out.run (e, 110);   // its stop fade (1 s)
+    check (! e.isCuePlaying (0) && e.isCuePlaying (1) && e.isCuePlaying (2), "a button on its output stops the loop (with its stop fade)");
+    e.stopAll (false);
+    out.run (e, 2);
+
+    auto loaded = Cue::fromVar (juce::JSON::parse (juce::JSON::toString (c.toVar())));
+    check (loaded.loopIn == 1.0 && loaded.loopOut == 2.0 && loaded.loop && ! loaded.loopFromLoopIn, "loop points are saved in the show");
+}
+
 static void testSelfDestruct()
 {
     std::puts ("Self Destruct");
@@ -899,6 +1012,109 @@ static void testStreamDeck()
     const auto now = juce::JSON::parse (server.stateJson()).getProperty ("now", {});
     check (now.getProperty ("name", {}).toString() == "Winner swell" && std::abs ((double) now.getProperty ("remaining", 0.0) - 0.8) < 0.051,
            "countdown: the sting just started, 0.8 s left (tenths in the last 10 s)");
+    client.close();
+}
+
+/** Sends an HTTP request, returns everything the server answered until it closed (or went quiet). */
+static std::string httpExchange (int port, const juce::String& request)
+{
+    juce::StreamingSocket client;
+    if (! client.connect ("127.0.0.1", port, 2000))
+        return {};
+    client.write (request.toRawUTF8(), (int) request.getNumBytesAsUTF8());
+    juce::MemoryBlock got;
+    std::vector<char> buffer (65536);
+    for (int quiet = 0; quiet < 10;)
+    {
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (30);
+        if (client.waitUntilReady (true, 30) <= 0)
+        {
+            ++quiet;
+            continue;
+        }
+        const int n = client.read (buffer.data(), (int) buffer.size(), false);
+        if (n <= 0)
+            break;
+        got.append (buffer.data(), (size_t) n);
+    }
+    return std::string (static_cast<const char*> (got.getData()), got.getSize());
+}
+
+/** The Wi-Fi remote's server: the key in the link, the page, the WebSocket, layout messages. */
+static void testRemoteServer()
+{
+    std::puts ("Wi-Fi remote server");
+    PlaybackEngine e;
+    e.prepareForTest (48000.0, 512);
+    ShowController sc (e);
+    sc.getShow().cue (5).name = "Winner swell";
+    sc.getShow().cue (5).file = juce::File::getCurrentWorkingDirectory().getChildFile ("winner.wav");
+    sc.setAudioForTest (5, constant (1, 1.0, 0.5f));
+
+    StreamDeckServer::Options options;
+    options.address = "127.0.0.1";   // (the real remote: every adapter; here no firewall prompt)
+    options.key = "secret123";
+    options.page = "<html>remote page</html>";
+    StreamDeckServer server (sc, 52898, options);
+    juce::var layoutMessage;
+    juce::String pressed;
+    server.perform = [&pressed] (const juce::String& a) { pressed = a; };
+    server.onMessage = [&layoutMessage] (const juce::var& m) { layoutMessage = m; };
+    server.addToState = [] (juce::DynamicObject& state) { state.setProperty ("layouts", "phone keys"); };
+    for (int i = 0; i < 50 && ! server.isListening(); ++i)
+        juce::Thread::sleep (20);
+    check (server.isListening(), "remote listening");
+
+    const auto page = httpExchange (52898, "GET /?k=secret123 HTTP/1.1\r\nHost: x\r\n\r\n");
+    check (page.rfind ("HTTP/1.1 200", 0) == 0 && page.find ("remote page") != std::string::npos, "the page is served with the right key");
+    const auto wrong = httpExchange (52898, "GET /?k=old HTTP/1.1\r\nHost: x\r\n\r\n");
+    check (wrong.rfind ("HTTP/1.1 403", 0) == 0 && wrong.find ("remote page") == std::string::npos, "a wrong key gets nothing");
+    const auto none = httpExchange (52898, "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+    check (none.rfind ("HTTP/1.1 403", 0) == 0, "no key gets nothing");
+    const auto socketNoKey = httpExchange (52898, "GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                                                  "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n");
+    check (socketNoKey.rfind ("HTTP/1.1 403", 0) == 0, "no WebSocket without the key");
+
+    juce::StreamingSocket client;
+    if (! client.connect ("127.0.0.1", 52898, 2000))
+    {
+        check (false, "phone connects");
+        return;
+    }
+    const juce::String request = "GET /ws?k=secret123 HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                                 "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+    client.write (request.toRawUTF8(), (int) request.getNumBytesAsUTF8());
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (400);
+    juce::MemoryBlock got;
+    std::vector<char> buffer (65536);
+    while (client.waitUntilReady (true, 300) > 0)
+    {
+        const int n = client.read (buffer.data(), (int) buffer.size(), false);
+        if (n <= 0)
+            break;
+        got.append (buffer.data(), (size_t) n);
+    }
+    const std::string raw (static_cast<const char*> (got.getData()), got.getSize());
+    check (raw.rfind ("HTTP/1.1 101", 0) == 0 && raw.find ("Winner swell") != std::string::npos, "WebSocket with the key gets the state");
+    check (raw.find ("phone keys") != std::string::npos, "the state carries the layouts");
+
+    for (const juce::String text : { juce::String ("{\"type\":\"layout\",\"device\":\"phone\",\"keys\":[]}"), juce::String ("{\"type\":\"press\",\"action\":\"stopAll\"}") })
+    {
+        juce::MemoryBlock frame;
+        const juce::uint8 mask[4] = { 9, 8, 7, 6 };
+        const juce::uint8 head[2] = { 0x81, (juce::uint8) (0x80 | text.length()) };
+        frame.append (head, 2);
+        frame.append (mask, 4);
+        for (int i = 0; i < text.length(); ++i)
+        {
+            const auto b = (juce::uint8) ((juce::uint8) text[i] ^ mask[i % 4]);
+            frame.append (&b, 1);
+        }
+        client.write (frame.getData(), (int) frame.getSize());
+    }
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (300);
+    check (layoutMessage.getProperty ("device", {}).toString() == "phone", "a layout from the phone reaches Stinger");
+    check (pressed == "stopAll", "a key press on the phone reaches Stinger");
     client.close();
 }
 
@@ -1354,6 +1570,38 @@ static int testDeviceSwitching (const juce::File& showFile)
     return 0;
 }
 
+/** EngineTests --remote-serve page.html seconds: the remote page on 127.0.0.1:52897/?k=test with a made-up show (for a browser). */
+static int remoteServe (const juce::String& pageFile, int seconds)
+{
+    PlaybackEngine e;
+    e.prepareForTest (48000.0, 512);
+    ShowController sc (e);
+    const char* names[] = { "Walk-up: Jordan", "Award swell", "Welcome to stage", "Drum roll", "Applause", "Big finish" };
+    for (int i = 0; i < 6; ++i)
+    {
+        sc.getShow().cue (i).name = names[i];
+        sc.getShow().cue (i).colour = i;
+        sc.getShow().cue (i).file = juce::File::getCurrentWorkingDirectory().getChildFile ("x" + juce::String (i) + ".wav");
+        sc.setAudioForTest (i, constant (1, 30.0, 0.5f));
+    }
+    StreamDeckServer::Options options;
+    options.key = "test";
+    options.page = juce::File (pageFile).loadFileAsString();
+    StreamDeckServer server (sc, 52897, options);
+    server.colourOf = [] (const Cue& c) { return c.colour == 0 ? juce::String ("#e5484d") : c.colour == 1 ? juce::String ("#f2a33a") : juce::String ("#3ccf7a"); };
+    server.perform = [&sc] (const juce::String& a) { std::printf ("press %s\n", a.toRawUTF8()); std::fflush (stdout); if (a.startsWith ("slot")) sc.play (a.substring (4).getIntValue() - 1); };
+    server.onMessage = [] (const juce::var& m) { std::printf ("message %s\n", juce::JSON::toString (m, true).toRawUTF8()); std::fflush (stdout); };
+    sc.play (1);
+    Outputs out (2);
+    const auto end = juce::Time::getMillisecondCounter() + (juce::uint32) (seconds * 1000);
+    while (juce::Time::getMillisecondCounter() < end)
+    {
+        out.run (e, 1);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (10);
+    }
+    return 0;
+}
+
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI juce;
@@ -1374,6 +1622,8 @@ int main (int argc, char** argv)
         return testDownload (juce::String (argv[2]));
     if (argc == 2 && juce::String (argv[1]) == "--arm")
         return testArming();
+    if (argc == 4 && juce::String (argv[1]) == "--remote-serve")
+        return remoteServe (juce::String (argv[2]), juce::String (argv[3]).getIntValue());
     if (argc >= 2 && juce::String (argv[1]) == "--devices")  // EngineTests --devices [show]: switch through every real device
         return testDeviceSwitching (argc >= 3 ? juce::File (juce::String (argv[2])) : juce::File());
     testFadeCurves();
@@ -1384,12 +1634,14 @@ int main (int argc, char** argv)
     testPlaybackModes();
     testFollow();
     testSeekAndLoop();
+    testLoopPoints();
     testMovingButtons();
     testShowFolders();
     testSelfDestruct();
     testPlaylists();
     testControls();
     testStreamDeck();
+    testRemoteServer();
     testPlugins();
     testRecording();
     testShowFile();

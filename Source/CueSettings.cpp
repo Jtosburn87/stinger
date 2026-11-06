@@ -80,6 +80,8 @@ CueSettings::CueSettings (ShowController& c) : controller (c), waveform (c), fxP
     fadeOthers.onClick = [this] { if (auto* q = cue()) { q->fadeOthers = fadeOthers.getToggleState(); changed(); } };
     loop.onClick = [this] { if (auto* q = cue()) { q->loop = loop.getToggleState(); changed(); } };
     addAndMakeVisible (fadeOthers);
+    loop.setTooltip ("Loop: plays until pressed again, another button on its output is pressed, or Stop all. Uses the loop points "
+                     "set in the waveform (Set Loop Points), else the whole clip. Off: plays once and stops.");
     addAndMakeVisible (loop);
 
     learn.setClickingTogglesState (true);

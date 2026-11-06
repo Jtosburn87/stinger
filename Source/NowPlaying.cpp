@@ -232,7 +232,7 @@ void NowPlaying::mouseDown (const juce::MouseEvent& e)
         else if (c.stop.contains (p))
             controller.getEngine().stopVoice (c.voice, false);
         else if (c.loop.contains (p))
-            controller.getEngine().setVoiceLoop (c.voice, ! c.looping);   // off: it finishes this pass
+            controller.setVoiceLoop (c.voice, ! c.looping);   // off: it finishes this pass (loop points: on to the Out point)
         else if (c.bar.contains (p))
             seek (c, p);
     }

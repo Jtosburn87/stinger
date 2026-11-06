@@ -444,9 +444,27 @@ void ShowController::play (int id)
     if (PlayPlan::make (show.cue (id), *audio, id, plan))
     {
         plan.takeOver = show.playbackMode;
+        plan.stopsLoops = true;
         attachFx (plan);
         engine.play (plan);
     }
+}
+
+void ShowController::setVoiceLoop (int voice, bool loop)
+{
+    for (auto& v : engine.getVoices())
+        if (v.voice == voice && show.isValid (v.cueId))
+        {
+            // a song with loop points playing normally: it plays to its Out point, then loops (from In, or Loop In)
+            PlayPlan loopPlan;
+            auto audio = getAudio (v.cueId);
+            if (loop && audio != nullptr && show.cue (v.cueId).hasLoopPoints()
+                && PlayPlan::makeLoop (show.cue (v.cueId), *audio, v.cueId, loopPlan))
+                engine.setVoiceLoop (voice, true, &loopPlan);
+            else
+                engine.setVoiceLoop (voice, loop);
+            return;
+        }
 }
 
 std::shared_ptr<CueAudio> ShowController::getAudio (int id) const

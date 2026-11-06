@@ -66,7 +66,14 @@ struct Cue
     float pan = 0.0f;                       // -1 (left) .. +1 (right)
     OutputRoute output;
     bool fadeOthers = false;                // starting this fades out everything else
-    bool loop = false;
+    bool loop = false;                      // plays until stopped (pressed again, another button on its output, Stop all)
+    double loopIn = -1.0, loopOut = -1.0;   // loop points, file seconds, anywhere in the file (< 0 = none: the whole clip loops)
+    bool loopFromLoopIn = false;            // a looping play starts at Loop In (else at In: the part up to the loop is an intro)
+
+    bool hasLoopPoints() const { return loopIn >= 0.0 && loopOut > loopIn; }
+    /** What plays when looping with loop points: the intro (In up to the loop), the loop (Loop In..Out) and the
+        outro (Loop Out..Out, played once the loop is turned off). Cuts are left out; pastes don't play. */
+    void loopSections (double fileSeconds, std::vector<Segment>& intro, std::vector<Segment>& body, std::vector<Segment>& outro) const;
     juce::String hotkey;                    // juce::KeyPress description, empty = none
     MidiTrigger midi;                       // plays this button from MIDI
 

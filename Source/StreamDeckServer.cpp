@@ -60,8 +60,8 @@ juce::String StreamDeckServer::acceptKey (const juce::String& key)
 class StreamDeckServer::Client : private juce::Thread
 {
 public:
-    Client (std::unique_ptr<juce::StreamingSocket> s, std::function<void (const juce::String&)> onText)
-        : juce::Thread ("Stream Deck client"), socket (std::move (s)), received (std::move (onText))
+    Client (std::unique_ptr<juce::StreamingSocket> s, std::function<void (const juce::String&)> onText, const Options& o)
+        : juce::Thread ("Stream Deck client"), socket (std::move (s)), received (std::move (onText)), options (o)
     {
         startThread();
     }
@@ -128,6 +128,16 @@ private:
         return bytes == 0;
     }
 
+    /** An HTTP reply, then the connection closes. */
+    bool reply (const juce::String& status, const juce::String& type, const juce::String& body)
+    {
+        const auto all = "HTTP/1.1 " + status + "\r\nContent-Type: " + type + "\r\nContent-Length: " + juce::String ((int) body.getNumBytesAsUTF8())
+                       + "\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n" + body;
+        const juce::ScopedLock sl (writeLock);
+        socket->write (all.toRawUTF8(), (int) all.getNumBytesAsUTF8());
+        return false;
+    }
+
     bool handshake()
     {
         juce::String request;
@@ -138,16 +148,32 @@ private:
                 return false;
             request += c;
         }
+        const auto lines = juce::StringArray::fromLines (request);
         juce::String key;
-        for (auto& line : juce::StringArray::fromLines (request))
+        for (auto& line : lines)
             if (line.startsWithIgnoreCase ("Sec-WebSocket-Key:"))
                 key = line.fromFirstOccurrenceOf (":", false, false).trim();
+
+        // "GET /path?k=... HTTP/1.1"
+        const auto target = lines[0].fromFirstOccurrenceOf (" ", false, false).upToFirstOccurrenceOf (" ", false, false);
+        const auto path = target.upToFirstOccurrenceOf ("?", false, false);
+        juce::String linkKey;
+        for (auto& param : juce::StringArray::fromTokens (target.fromFirstOccurrenceOf ("?", false, false), "&", {}))
+            if (param.startsWith ("k="))
+                linkKey = param.substring (2);
+        if (options.key.isNotEmpty() && linkKey != options.key)
+            return reply ("403 Forbidden", "text/plain; charset=utf-8", "This link is old or wrong: scan the QR code in Stinger again.");
+
         if (key.isEmpty())
-            return false;
-        const auto reply = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-                           "Sec-WebSocket-Accept: " + acceptKey (key) + "\r\n\r\n";
+        {
+            if (options.page.isNotEmpty() && (path == "/" || path == "/remote"))
+                return reply ("200 OK", "text/html; charset=utf-8", options.page);
+            return reply ("404 Not Found", "text/plain; charset=utf-8", "Not here.");
+        }
+        const auto answer = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                            "Sec-WebSocket-Accept: " + acceptKey (key) + "\r\n\r\n";
         const juce::ScopedLock sl (writeLock);
-        return socket->write (reply.toRawUTF8(), (int) reply.getNumBytesAsUTF8()) > 0;
+        return socket->write (answer.toRawUTF8(), (int) answer.getNumBytesAsUTF8()) > 0;
     }
 
     void run() override
@@ -209,14 +235,15 @@ private:
 
     std::unique_ptr<juce::StreamingSocket> socket;
     std::function<void (const juce::String&)> received;
+    const Options options;
     juce::CriticalSection writeLock;
     std::atomic<bool> open { true }, handshakeDone { false }, fresh { false };
 };
 
 // ---------------------------------------------------------------------------------------------
 
-StreamDeckServer::StreamDeckServer (ShowController& c, int listenPort)
-    : juce::Thread ("Stream Deck server"), controller (c), port (listenPort)
+StreamDeckServer::StreamDeckServer (ShowController& c, int listenPort, Options o)
+    : juce::Thread ("Stream Deck server"), controller (c), port (listenPort), options (std::move (o))
 {
     startThread();
     startTimerHz (10);
@@ -244,8 +271,11 @@ int StreamDeckServer::numClients() const
 
 void StreamDeckServer::run()
 {
-    if (! server.createListener (port, "127.0.0.1"))
+    if (! server.createListener (port, options.address))
+    {
+        listenFailed.store (true);
         return;   // port taken (another Stinger?): no Stream Deck
+    }
     listening.store (true);
     while (! threadShouldExit())
     {
@@ -261,7 +291,7 @@ void StreamDeckServer::run()
             });
         };
         const juce::ScopedLock sl (clientLock);
-        clients.add (new Client (std::move (socket), onText));
+        clients.add (new Client (std::move (socket), onText, options));
     }
     listening.store (false);
 }
@@ -269,12 +299,14 @@ void StreamDeckServer::run()
 void StreamDeckServer::received (const juce::String& text)
 {
     const auto v = juce::JSON::parse (text);
-    if (v.getProperty ("type", {}).toString() == "press" && perform)
+    if (v.getProperty ("type", {}).toString() == "press")
     {
         const auto action = v.getProperty ("action", {}).toString();
-        if (action.isNotEmpty())
+        if (action.isNotEmpty() && perform)
             perform (action);
     }
+    else if (v.isObject() && onMessage)
+        onMessage (v);
 }
 
 juce::String StreamDeckServer::stateJson()
@@ -384,6 +416,8 @@ juce::String StreamDeckServer::stateJson()
         o->setProperty ("others", (int) voices.size() - 1);
         root->setProperty ("now", o);
     }
+    if (addToState)
+        addToState (*root);
     return juce::JSON::toString (juce::var (root), true);
 }
 

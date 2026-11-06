@@ -10,6 +10,7 @@ let stinger = null;
 let state = null;              // last state from Stinger, null = not connected
 const keys = {};               // context -> { action, settings }
 const shown = {};              // context -> last image sent
+const titles = {};             // context -> { text, params }: the title typed in the Stream Deck app (kept across pages)
 const inspectors = {};         // context -> action, while its settings panel is open
 let namesSent = '';            // the playlist / bank names the open panels last got
 
@@ -30,6 +31,14 @@ function fromStreamDeck (m) {
         case 'willDisappear':
             delete keys[m.context];
             delete shown[m.context];
+            break;
+        case 'titleParametersDidChange':
+            // the Title box (and its size / colour / font / position) in the Stream Deck app: drawn on the key by us
+            titles[m.context] = { text: (m.payload && m.payload.title) || '', params: (m.payload && m.payload.titleParameters) || {} };
+            if (keys[m.context]) {
+                delete shown[m.context];
+                draw (m.context);
+            }
             break;
         case 'didReceiveSettings':
             if (keys[m.context]) {
@@ -166,58 +175,78 @@ function render (context) {
     const kind = k.action.substring (PREFIX.length);
     if (! state)
         return key ('#15181c', '#2c323a', [ text ('STINGER', 72, 62, 18, '#6e7885', true), text ('not running', 72, 92, 16, '#6e7885') ]);
+    return renderKind (kind, k.settings, actionOf (context), titleOf (context));
+}
 
-    const action = actionOf (context);
+/** The key's title from the Stream Deck app (the Title box and its T menu: size, colour, font, position), drawn in
+    Stinger's style in place of the key's own label. null = no title: the key's own label. */
+function titleOf (context) {
+    const t = titles[context];
+    if (! t || ! t.params || ! String (t.text || '').trim())   // (not showTitle: the manifest hides Stream Deck's own title, so it reads off)
+        return null;
+    const p = t.params;
+    const style = String (p.fontStyle || '');
+    return { text: t.text, size: (p.fontSize || 12) * 2,   // Stream Deck sizes are for 72 px keys, ours are drawn at 144
+             colour: validColour (p.titleColor) || '#ffffff', align: p.titleAlignment || 'middle', family: p.fontFamily || '',
+             bold: style === '' || style.indexOf ('Bold') >= 0, italic: style.indexOf ('Italic') >= 0, underline: !! p.fontUnderline };
+}
+
+/** A key for an action. s = its settings (playlist, bank, keyColour); custom = your own text (null = the key's own label). */
+function renderKind (kind, s, action, custom) {
+    const own = (label) => custom ? customText (custom) : label;   // your text in place of the key's own label
     switch (kind) {
-        case 'button':    return renderButton (k.settings, action);
-        case 'countdown': return renderCountdown();
+        case 'button':    return renderButton (action, custom);
+        case 'countdown': return renderCountdown (custom);
         case 'go': {
-            // the selected playlist, or the one picked in the key's settings
+            // the selected playlist, or the one picked in the key's settings; any colour (default green)
             const lists = state.playlists || [];
-            const fixed = k.settings.playlist && k.settings.playlist !== 'selected';
-            const index = fixed ? clamp (parseInt (k.settings.playlist), 0, 7) : (state.go.playlist || 0);
+            const fixed = s.playlist && s.playlist !== 'selected';
+            const index = fixed ? clamp (parseInt (s.playlist), 0, 7) : (state.go.playlist || 0);
             const list = fixed ? lists[index] : { name: (lists[index] || {}).name, next: state.go.next, looping: state.go.looping };
             if (! list)
-                return key ('#15181c', '#2c323a', [ text ('GO', 72, 70, 44, '#4a5260', true), text ('no playlist ' + (index + 1), 72, 104, 14, '#6e7885') ]);
+                return key ('#15181c', '#2c323a', [ glyph ('playlist', 10, 8, 18, '#6e7885'), ...own ([ text ('GO', 72, 70, 44, '#4a5260', true) ]),
+                                                    text ('no playlist ' + (index + 1), 72, 104, 14, '#6e7885') ]);
+            const back = validColour (s.keyColour) || '#2f8f5b';
+            const fore = validColour (s.keyColour) ? textOn (back) : '#ffffff';
             const sub = list.looping ? 'finishes loop' : (list.next || 'end of list');
-            const parts = [ text ('GO', 72, 74, 44, '#ffffff', true), ...lines (sub, 72, 110, 15, '#e6f5ec', 2, 15) ];
+            const parts = [ glyph ('playlist', 10, 8, 18, fore), ...own ([ text ('GO', 72, 74, 44, fore, true) ]),
+                            ...lines (sub, 72, 110, 15, fore, 2, 15).map (t => t.replace ('fill-opacity="1"', 'fill-opacity="0.85"')) ];
             if (list.name && (fixed || lists.length > 1))
-                parts.push (text (list.name.length > 14 ? list.name.substring (0, 13) + '…' : list.name, 72, 30, 15, '#cdeedb', true));
-            return key ('#2f8f5b', '#2f8f5b', parts);
+                parts.push (text (list.name.length > 11 ? list.name.substring (0, 10) + '…' : list.name, 78, 24, 14, fore, true, 'middle', 0.8));
+            return key (back, back, parts);
         }
         case 'fadenext':
-            return key ('#172636', '#3f6a95', [ text ('FADE TO', 72, 62, 22, '#a9d0f7', true), text ('NEXT', 72, 90, 22, '#a9d0f7', true) ]);
+            return key ('#172636', '#3f6a95', own ([ text ('FADE TO', 72, 62, 22, '#a9d0f7', true), text ('NEXT', 72, 90, 22, '#a9d0f7', true) ]));
         case 'stopall':
-            return key (state.anyPlaying ? '#c93a3f' : '#3a1c1e', '#c93a3f', [ text ('STOP', 72, 64, 28, '#ffffff', true), text ('ALL', 72, 96, 28, '#ffffff', true) ]);
+            return key (state.anyPlaying ? '#c93a3f' : '#3a1c1e', '#c93a3f', own ([ text ('STOP', 72, 64, 28, '#ffffff', true), text ('ALL', 72, 96, 28, '#ffffff', true) ]));
         case 'fadeall':
-            return key ('#262b32', state.anyPlaying ? '#f2a33a' : '#4a5260', [ text ('FADE', 72, 64, 26, '#e8eaed', true), text ('ALL', 72, 96, 26, '#e8eaed', true) ]);
+            return key ('#262b32', state.anyPlaying ? '#f2a33a' : '#4a5260', own ([ text ('FADE', 72, 64, 26, '#e8eaed', true), text ('ALL', 72, 96, 26, '#e8eaed', true) ]));
         case 'selfdestruct':
             // lit red while the mode is on
             return state.selfDestruct
-                ? key ('#8a1c1f', '#e5484d', [ text ('SELF', 72, 52, 24, '#ffffff', true), text ('DESTRUCT', 72, 80, 22, '#ffffff', true), text ('ON', 72, 116, 20, '#ffd1d2', true) ], 8)
-                : key ('#1e2228', '#4a5260', [ text ('SELF', 72, 52, 24, '#a7b0bb', true), text ('DESTRUCT', 72, 80, 22, '#a7b0bb', true), text ('OFF', 72, 116, 20, '#6e7885', true) ]);
+                ? key ('#8a1c1f', '#e5484d', [ ...own ([ text ('SELF', 72, 52, 24, '#ffffff', true), text ('DESTRUCT', 72, 80, 22, '#ffffff', true) ]), text ('ON', 72, 116, 20, '#ffd1d2', true) ], 8)
+                : key ('#1e2228', '#4a5260', [ ...own ([ text ('SELF', 72, 52, 24, '#a7b0bb', true), text ('DESTRUCT', 72, 80, 22, '#a7b0bb', true) ]), text ('OFF', 72, 116, 20, '#6e7885', true) ]);
         case 'resetcolours': {
             const spent = (state.cues || []).filter (c => c.spent).length;
             return key (spent ? '#262b32' : '#15181c', spent ? '#c9d0d8' : '#2c323a',
-                        [ text ('RESET', 72, 60, 26, spent ? '#e8eaed' : '#4a5260', true), text ('COLOURS', 72, 90, 20, spent ? '#e8eaed' : '#4a5260', true),
+                        [ ...own ([ text ('RESET', 72, 60, 26, spent ? '#e8eaed' : '#4a5260', true), text ('COLOURS', 72, 90, 20, spent ? '#e8eaed' : '#4a5260', true) ]),
                           text (spent ? spent + ' black' : 'none black', 72, 118, 14, spent ? '#a7b0bb' : '#4a5260') ]);
         }
         case 'bank': {
-            const s = k.settings;
             if (! s.bank || s.bank === 'next' || s.bank === 'previous')
-                return key ('#1e2228', '#2c323a', [ text (s.bank !== 'previous' ? 'BANK ▶' : '◀ BANK', 72, 66, 24, '#c9d0d8', true),
+                return key ('#1e2228', '#2c323a', [ ...own ([ text (s.bank !== 'previous' ? 'BANK ▶' : '◀ BANK', 72, 66, 24, '#c9d0d8', true) ]),
                                                     text (bankLetter (state.bank) + ' · ' + (state.banks[state.bank] || ''), 72, 98, 14, '#a7b0bb') ]);
             const b = clamp (parseInt (s.bank || '0'), 0, 7);
             const current = b === state.bank;
             return key (current ? '#2a2418' : '#1e2228', current ? '#f2a33a' : '#2c323a',
-                        [ text (bankLetter (b), 72, 70, 44, current ? '#f5c77e' : '#c9d0d8', true),
+                        [ ...own ([ text (bankLetter (b), 72, 70, 44, current ? '#f5c77e' : '#c9d0d8', true) ]),
                           ...lines (state.banks[b] || '', 72, 106, 15, current ? '#f5c77e' : '#a7b0bb', 2, 15) ]);
         }
     }
     return key ('#15181c', '#2c323a', []);
 }
 
-function renderButton (settings, action) {
+function renderButton (action, custom) {
     let cue = null, label = '';
     if (action.startsWith ('cue:')) {
         const id = parseInt (action.substring (4));
@@ -229,12 +258,13 @@ function renderButton (settings, action) {
         label = bankLetter (state.bank) + (slot + 1);
     }
     if (! cue)
-        return key ('#0e1013', '#2c323a', [ text (label, 72, 66, 22, '#4a5260', true), text ('empty', 72, 94, 15, '#4a5260') ]);
+        return key ('#0e1013', '#2c323a', [ glyph ('button', 10, 10, 18, '#4a5260'),
+                                            ...(custom ? customText (custom) : [ text (label, 72, 66, 22, '#4a5260', true), text ('empty', 72, 94, 15, '#4a5260') ]) ]);
 
     const parts = [];
     if (cue.playing && cue.waitLeft !== undefined) {
         // over, waiting before the playlist's next song
-        parts.push (...lines (cue.name, 72, 34, 16, '#a9d0f7', 2, 16));
+        parts.push (...(custom ? customText (custom) : lines (cue.name, 72, 34, 16, '#a9d0f7', 2, 16)));
         parts.push (text ('NEXT IN', 72, 76, 16, '#a9d0f7', true));
         parts.push (text (time (cue.waitLeft), 72, 112, 34, '#ffffff', true));
         return key ('#172636', '#5aa9f0', parts, 8);
@@ -243,8 +273,8 @@ function renderButton (settings, action) {
         // playing: the whole key in the button's colour, the countdown big
         const back = cue.stopping ? shade (cue.colour, 0.55) : cue.colour;
         const fore = textOn (back);
-        parts.push (...lines (cue.name, 72, 34, 16, fore, 2, 16));
-        parts.push (text (cue.looping ? '\u21BB LOOP' : '-' + time (cue.remaining), 72, 98, cue.looping ? 28 : 38, fore, true));
+        parts.push (...(custom ? customText (custom) : lines (cue.name, 72, 34, 16, fore, 2, 16)));
+        parts.push (text (cue.looping ? '↻ LOOP' : '-' + time (cue.remaining), 72, 98, cue.looping ? 28 : 38, fore, true));
         parts.push ('<rect x="12" y="116" width="120" height="10" rx="5" fill="' + fore + '" fill-opacity="0.25"/>');
         parts.push ('<rect x="12" y="116" width="' + Math.round (120 * Math.min (1, cue.progress || 0)) + '" height="10" rx="5" fill="' + fore + '"/>');
         return key (back, fore, parts, 8);
@@ -253,7 +283,8 @@ function renderButton (settings, action) {
     const back = cue.spent ? '#000000' : shade (cue.colour, 0.42);
     const fore = textOn (back);
     parts.push ('<rect x="0" y="0" width="144" height="14" fill="' + cue.colour + '"/>');
-    parts.push (...lines (cue.name, 72, 54, 20, fore, 3, 22));
+    parts.push (glyph ('button', 10, 20, 18, fore));
+    parts.push (...(custom ? customText (custom) : lines (cue.name, 72, 54, 20, fore, 3, 22)));
     parts.push (text (label, 14, 132, 13, fore, false, 'start', 0.6));
     if (cue.next) {
         parts.push ('<rect x="84" y="118" width="52" height="20" rx="4" fill="#2f8f5b"/>');
@@ -262,15 +293,15 @@ function renderButton (settings, action) {
     return key (back, cue.next ? '#2f8f5b' : cue.spent ? '#2c323a' : shade (cue.colour, 0.8), parts);
 }
 
-/** The sting started last, in its colour: name, time left (tenths in the last 10 s), progress. */
-function renderCountdown () {
+/** The sting started last, in its colour: name (or your text), time left (tenths in the last 10 s), progress. */
+function renderCountdown (custom) {
     const now = state.now;
     if (! now)
-        return key ('#0e1013', '#2c323a', [ text ('--:--', 72, 78, 34, '#4a5260', true), text ('nothing playing', 72, 106, 14, '#4a5260') ]);
+        return key ('#0e1013', '#2c323a', [ ...(custom ? customText (custom) : []), text ('--:--', 72, 78, 34, '#4a5260', true), text ('nothing playing', 72, 106, 14, '#4a5260') ]);
     if (now.waitLeft !== undefined) {
         // a playlist Wait: counting down to the next song
         const big = now.waitLeft < 10 ? Number (now.waitLeft).toFixed (1) : time (now.waitLeft);
-        return key ('#172636', '#5aa9f0', [ text ('NEXT IN', 72, 30, 16, '#a9d0f7', true),
+        return key ('#172636', '#5aa9f0', [ ...(custom ? customText (custom) : [ text ('NEXT IN', 72, 30, 16, '#a9d0f7', true) ]),
                                             text (big, 72, 80, 40, '#ffffff', true),
                                             ...lines (now.nextName || 'next song', 72, 110, 14, '#a9d0f7', 2, 15) ], 8);
     }
@@ -278,10 +309,10 @@ function renderCountdown () {
     const back = now.stopping ? shade (now.colour, 0.55) : now.colour;
     const fore = textOn (back);
     const parts = [];
-    parts.push (...lines (now.name, 72, 34, 16, fore, 2, 16));
+    parts.push (...(custom ? customText (custom) : lines (now.name, 72, 34, 16, fore, 2, 16)));
     let big;
     if (now.looping)
-        big = '\u21BB LOOP';
+        big = '↻ LOOP';
     else if (now.remaining < 10)
         big = '-' + Number (now.remaining).toFixed (1);
     else
@@ -293,6 +324,73 @@ function renderCountdown () {
         parts.push (text ('+' + now.others + ' more', 132, 138, 11, fore, false, 'end', 0.8));
     // last 10 seconds: a red frame
     return key (back, ending && ! now.stopping ? '#ff2d2d' : fore, parts, 8);
+}
+
+/** Text as key lines: Enter starts a new line, a line too wide for the key wraps at a word (a word too long on its own is split). */
+function wrapText (s, size) {
+    const perLine = Math.max (3, Math.floor (126 / (size * 0.58)));
+    const out = [];
+    for (const raw of String (s).split (/\r?\n/)) {
+        let line = '';
+        for (let w of raw.split (/\s+/).filter (w => w.length > 0)) {
+            const candidate = line ? line + ' ' + w : w;
+            if (candidate.length <= perLine) {
+                line = candidate;
+                continue;
+            }
+            if (line)
+                out.push (line);
+            while (w.length > perLine) {
+                out.push (w.substring (0, perLine));
+                w = w.substring (perLine);
+            }
+            line = w;
+        }
+        out.push (line);
+    }
+    return out;
+}
+
+/** Your own text: lines (long ones wrap at words), size (px on the 144 px key), colour, top / middle / bottom, font,
+    bold / italic / underline. */
+function customText (t) {
+    const size = clamp (Math.round (t.size), 8, 72);
+    const all = wrapText (t.text, size).slice (0, 8);
+    const lineHeight = size * 1.1;
+    const block = lineHeight * (all.length - 1);
+    let y;
+    if (t.align === 'top')
+        y = 10 + size * 0.85;
+    else if (t.align === 'bottom')
+        y = 134 - size * 0.22 - block;
+    else
+        y = 72 + size * 0.35 - block / 2;
+    const family = t.family ? escape (t.family) + ', ' : '';
+    return all.map ((l, i) => '<text x="72" y="' + (y + i * lineHeight).toFixed (1) + '" font-family="' + family + 'Segoe UI, -apple-system, Helvetica, Arial, sans-serif"'
+                            + ' font-size="' + size + '" font-weight="' + (t.bold === false ? '400' : '700') + '"'
+                            + (t.italic ? ' font-style="italic"' : '') + (t.underline ? ' text-decoration="underline"' : '')
+                            + ' fill="' + t.colour + '" text-anchor="middle">' + escape (l) + '</text>');
+}
+
+/** A small corner icon saying what kind of key it is (a button / a playlist), so keys with your own text or colour stay recognisable. */
+function glyph (kind, x, y, size, colour) {
+    const k = size / 24;
+    const n = (v) => (v * k).toFixed (1);
+    const at = '<g transform="translate(' + x + ',' + y + ')" opacity="0.8"';
+    if (kind === 'button')   // a pad
+        return at + ' fill="none" stroke="' + colour + '" stroke-width="' + n (2.2) + '">'
+             + '<rect x="' + n (2) + '" y="' + n (2) + '" width="' + n (20) + '" height="' + n (20) + '" rx="' + n (4.5) + '"/>'
+             + '<rect x="' + n (7.5) + '" y="' + n (7.5) + '" width="' + n (9) + '" height="' + n (9) + '" rx="' + n (2) + '" fill="' + colour + '" stroke="none"/></g>';
+    // a playlist: a list with a play triangle
+    return at + ' stroke="' + colour + '" stroke-width="' + n (2.6) + '" stroke-linecap="round" fill="' + colour + '">'
+         + '<line x1="' + n (2) + '" y1="' + n (4) + '" x2="' + n (16) + '" y2="' + n (4) + '"/>'
+         + '<line x1="' + n (2) + '" y1="' + n (11) + '" x2="' + n (16) + '" y2="' + n (11) + '"/>'
+         + '<line x1="' + n (2) + '" y1="' + n (18) + '" x2="' + n (9) + '" y2="' + n (18) + '"/>'
+         + '<path d="M' + n (13) + ' ' + n (14) + ' L' + n (23) + ' ' + n (19) + ' L' + n (13) + ' ' + n (24) + ' Z" stroke="none"/></g>';
+}
+
+function validColour (c) {
+    return /^#[0-9a-fA-F]{6}$/.test (String (c || '')) ? String (c) : null;
 }
 
 // ---- colours ----

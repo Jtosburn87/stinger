@@ -31,8 +31,12 @@ struct PlayPlan
     float pan = 0.0f;
     OutputRoute output;
     bool loop = false;
+    juce::int64 loopStart = 0, loopEnd = -1;   // loop points on the timeline: while looping, loopEnd jumps back to loopStart
+                                               // (loopEnd < 0 = no loop points: the end jumps back to the start)
+    juce::int64 loopRestart = 0;    // loop points, looping again after Loop Out was passed: the end jumps back here
     bool fadeOthers = false;
     PlaybackMode takeOver = PlaybackMode::overlap;   // one at a time / per output: stops the others (overlap = none)
+    bool stopsLoops = false;        // a button press: stops looping buttons that share an output (in every playback mode)
     int tag = 0;                   // playlist entry this was started for (0 = none)
     int playlist = 0;               // playlist (uid) it was started for, 0 = a button. Taking over leaves the
                                     // songs of its own playlist alone (GO fades those itself)
@@ -42,6 +46,9 @@ struct PlayPlan
 
     /** Builds a plan from a cue and its loaded audio. Returns false if nothing would play. */
     static bool make (const Cue& cue, const CueAudio& audio, int cueId, PlayPlan& plan);
+    /** The looping play of a cue: with loop points, intro + loop + outro (Cue::loopSections) starting at In or Loop In;
+        without, the whole clip. */
+    static bool makeLoop (const Cue& cue, const CueAudio& audio, int cueId, PlayPlan& plan);
 };
 
 /** Plays cues to the audio device. Every cue becomes a voice that writes to its own output
@@ -107,8 +114,10 @@ public:
     void releaseLoop (int tag);
     /** Jumps a playing voice to a timeline position (samples), dipping for a few ms so it doesn't click. */
     void seekVoice (int voice, juce::int64 position);
-    /** Loop on / off for one playing voice. Off: it finishes the pass it's in. */
-    void setVoiceLoop (int voice, bool loop);
+    /** Loop on / off for one playing voice. Off: it finishes the pass it's in (with loop points: it carries on to
+        the Out point). On with a loopPlan (a cue with loop points playing normally): it carries on from the same place
+        by the loop points (Loop Out jumps to Loop In; already past Loop Out: the Out point goes to Loop In). */
+    void setVoiceLoop (int voice, bool loop, const PlayPlan* loopPlan = nullptr);
     /** Two buttons swapped places: voices playing one carry on as the other. */
     void swapCues (int a, int b);
     /** A button's plugins changed while it plays: its voices (and songs queued to follow as it) go
@@ -119,6 +128,7 @@ public:
     {
         int voice = -1, cueId = -1, tag = 0;
         double position = 0.0, length = 0.0;   // seconds of the timeline
+        double filePosition = 0.0;             // where in the audio file it's playing (seconds)
         bool stopping = false;
         bool looping = false;
         bool hasFollow = false;
@@ -177,12 +187,14 @@ private:
         bool skipFadeOut = false;       // loop released inside the fade-out: no jump in level
         juce::int64 seekTo = -1;        // where a seek jumps once the dip reaches silence (-1 = none)
         juce::int64 seekLeft = 0;       // samples left of that dip
+        bool hasLoopPlan = false;       // Loop pressed while playing normally: at the end it carries on as loopPlan
+        PlayPlan loopPlan;
     };
 
     struct VoiceStatus
     {
         std::atomic<int> cueId { -1 };
-        std::atomic<juce::int64> position { 0 }, length { 0 };
+        std::atomic<juce::int64> position { 0 }, length { 0 }, filePosition { 0 };
         std::atomic<bool> stopping { false };
         std::atomic<const CueAudio*> audio { nullptr };
         std::atomic<const CueFx*> fx { nullptr };
@@ -197,6 +209,8 @@ private:
     void push (const Command& c);
     void handleCommands();
     Voice* startVoice (const PlayPlan& plan, int blockDelay = 0);
+    /** Loop pressed on a voice playing normally: it carries on from the same place as loopPlan (Loop Out jumps to Loop In). */
+    void switchToLoop (Voice& v, const PlayPlan& loopPlan);
     void beginStop (Voice& v, bool fade);
     void stopOver (Voice& v, juce::int64 length, FadeCurve curve);
     void render (Voice& v, float* const* outputs, int numOutputChannels, int numSamples);

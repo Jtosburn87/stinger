@@ -5,6 +5,7 @@
 namespace
 {
     const juce::Colour fadeBlue { 0xff7cb8f2 };
+    const juce::Colour loopGreen { 0xff4cc38a };
     constexpr int nearEnd = 28;   // px: how close to an end the fade / trim tools take over
 
     juce::String formatPrecise (double seconds)
@@ -92,7 +93,8 @@ bool WaveformEditor::Edits::operator== (const Edits& o) const
 {
     return trimIn == o.trimIn && trimOut == o.trimOut && cuts == o.cuts && pastes == o.pastes
         && fadeIn.seconds == o.fadeIn.seconds && fadeIn.curve == o.fadeIn.curve
-        && fadeOut.seconds == o.fadeOut.seconds && fadeOut.curve == o.fadeOut.curve;
+        && fadeOut.seconds == o.fadeOut.seconds && fadeOut.curve == o.fadeOut.curve
+        && loopIn == o.loopIn && loopOut == o.loopOut && loopFromLoopIn == o.loopFromLoopIn;
 }
 
 WaveformEditor::Edits WaveformEditor::Edits::of (const Cue& c)
@@ -104,6 +106,9 @@ WaveformEditor::Edits WaveformEditor::Edits::of (const Cue& c)
     e.pastes = c.pastes;
     e.fadeIn = c.fadeIn;
     e.fadeOut = c.fadeOut;
+    e.loopIn = c.loopIn;
+    e.loopOut = c.loopOut;
+    e.loopFromLoopIn = c.loopFromLoopIn;
     return e;
 }
 
@@ -115,6 +120,9 @@ void WaveformEditor::Edits::applyTo (Cue& c) const
     c.pastes = pastes;
     c.fadeIn = fadeIn;
     c.fadeOut = fadeOut;
+    c.loopIn = loopIn;
+    c.loopOut = loopOut;
+    c.loopFromLoopIn = loopFromLoopIn;
 }
 
 double WaveformEditor::snapToZero (const CueAudio& audio, double t)
@@ -130,7 +138,8 @@ class WaveformEditor::Canvas : public juce::Component
 public:
     explicit Canvas (WaveformEditor& e) : editor (e) {}
 
-    enum class Tool { none, pointer, fadeIn, fadeOut, trimIn, trimOut, razor };
+    enum class Tool { none, pointer, fadeIn, fadeOut, trimIn, trimOut, razor, loopIn, loopOut };
+    static constexpr float loopGrab = 7.0f, loopFlag = 16.0f;   // px: how close to a loop marker grabs it; flag height
 
     std::function<void (const juce::String&)> onHint;
 
@@ -145,6 +154,14 @@ public:
         const float h = (float) getHeight();
         const float inX = xOf (editor.playIn()), outX = xOf (editor.playOut());
 
+        if (c->hasLoopPoints() && p.y < h * 2.0f / 3.0f)
+        {
+            // loop markers: the flags at the top always grab; the lines unless an In / Out handle is closer
+            const float dIn = std::abs (p.x - xOf (c->loopIn)), dOut = std::abs (p.x - xOf (c->loopOut));
+            const float d = std::min (dIn, dOut);
+            if (d < loopGrab && (p.y < loopFlag || d <= std::min (std::abs (p.x - inX), std::abs (p.x - outX))))
+                return dIn <= dOut ? Tool::loopIn : Tool::loopOut;
+        }
         if (p.y >= h * 2.0f / 3.0f)
             return Tool::razor;
         if (p.y < h / 3.0f)
@@ -176,6 +193,8 @@ public:
             case Tool::trimIn:    return "Trim: drag the In point";
             case Tool::trimOut:   return "Trim: drag the Out point";
             case Tool::razor:     return "Razor: drag across a section to cut it out, click a cut to bring it back";
+            case Tool::loopIn:    return "Loop In: drag to move where the loop starts (right-click to clear the loop points)";
+            case Tool::loopOut:   return "Loop Out: drag to move where the loop jumps back (right-click to clear the loop points)";
             case Tool::pointer:   return juce::String::fromUTF8 ("Click: preview cursor here \xc2\xb7 drag: select (then Cut, Copy, Paste or Split) \xc2\xb7 Split with nothing selected splits here");
             case Tool::none:      break;
         }
@@ -207,7 +226,9 @@ public:
             case Tool::trimIn:    setMouseCursor (trimCursor (true)); break;
             case Tool::trimOut:   setMouseCursor (trimCursor (false)); break;
             case Tool::razor:     setMouseCursor (razorCursor()); break;
-            default:              setMouseCursor (juce::MouseCursor::NormalCursor); break;
+            case Tool::loopIn:
+            case Tool::loopOut:   setMouseCursor (juce::MouseCursor::LeftRightResizeCursor); break;
+            default:             setMouseCursor (juce::MouseCursor::NormalCursor); break;
         }
         if (onHint)
             onHint (hintFor (t));
@@ -274,6 +295,12 @@ public:
             }
             case Tool::razor:
                 razorTo = t;
+                break;
+            case Tool::loopIn:   // anywhere in the file, before Loop Out
+                c->loopIn = juce::jlimit (0.0, std::max (0.0, c->loopOut - minLength), WaveformEditor::snapToZero (*audio, t));
+                break;
+            case Tool::loopOut:
+                c->loopOut = juce::jlimit (std::min (file, c->loopIn + minLength), file, WaveformEditor::snapToZero (*audio, t));
                 break;
             case Tool::pointer:
                 if (e.getDistanceFromDragStart() < 3)
@@ -354,6 +381,11 @@ public:
                 cutIndex = i;
 
         juce::PopupMenu m;
+        if (tool == Tool::loopIn || tool == Tool::loopOut)
+        {
+            m.addItem (31, "Clear loop points");
+            m.addSeparator();
+        }
         if (tool == Tool::fadeIn || tool == Tool::fadeOut)
         {
             const auto& fade = tool == Tool::fadeIn ? c->fadeIn : c->fadeOut;
@@ -375,6 +407,7 @@ public:
             m.addItem (21, "Copy selection (Ctrl+C)");
             m.addItem (22, "Delete selection (Del)");
             m.addItem (23, "Split selection to a new button");
+            m.addItem (30, "Set loop points to the selection");
         }
         else if (t > editor.playIn() && t < editor.playOut())
         {
@@ -387,6 +420,8 @@ public:
         m.addItem (7, "Remove all pastes", ! c->pastes.empty());
         m.addItem (5, "Reset trims");
         m.addItem (6, "Remove fades", c->fadeIn.seconds > 0.0 || c->fadeOut.seconds > 0.0);
+        if (c->hasLoopPoints() && tool != Tool::loopIn && tool != Tool::loopOut)
+            m.addItem (31, "Clear loop points");
 
         juce::Component::SafePointer<Canvas> safe (this);
         const bool fadeInMenu = tool == Tool::fadeIn;
@@ -403,6 +438,8 @@ public:
                 case 23: ed.splitSelection(); return;
                 case 25: ed.cursor = t; ed.splitAtCursor(); return;
                 case 24: ed.selection = {}; ed.cursor = juce::jlimit (0.0, ed.fileSeconds(), t); ed.paste(); return;
+                case 30: ed.setLoopPoints(); return;
+                case 31: ed.clearLoopPoints(); return;
                 default: break;
             }
             auto* cue = ed.cue();
@@ -614,6 +651,22 @@ public:
             tag ("FADE OUT " + juce::String (c->fadeOut.seconds, 1) + " s", xOf (out - c->fadeOut.seconds) - 7.0f, r.getY() + 2.0f,
                  juce::Colour (0xff172636), juce::Colour (0xffa9d0f7), true);
 
+        // loop points: the looped part tinted green, a bracket along the top, a flag on each marker to drag
+        if (c->hasLoopPoints())
+        {
+            const float lx = xOf (c->loopIn), rx = xOf (c->loopOut);
+            g.setColour (loopGreen.withAlpha (0.10f));
+            g.fillRect (r.withLeft (lx).withRight (rx));
+            g.setColour (loopGreen);
+            g.fillRect (lx, r.getY(), rx - lx, 3.0f);
+            g.fillRect (lx - 1.0f, r.getY(), 2.0f, r.getHeight());
+            g.fillRect (rx - 1.0f, r.getY(), 2.0f, r.getHeight());
+            g.fillRoundedRectangle (lx, r.getY(), 11.0f, loopFlag, 2.0f);
+            g.fillRoundedRectangle (rx - 11.0f, r.getY(), 11.0f, loopFlag, 2.0f);
+            tag ("LOOP IN " + CueGrid::formatTimeTenths (c->loopIn), lx + 4.0f, r.getY() + 20.0f, loopGreen, Look::ground);
+            tag ("LOOP OUT " + CueGrid::formatTimeTenths (c->loopOut), rx - 4.0f, r.getY() + 20.0f, loopGreen, Look::ground, true);
+        }
+
         // trim handles
         g.setColour (Look::text);
         g.fillRect (inX - 1.0f, r.getY(), 3.0f, r.getHeight());
@@ -630,20 +683,12 @@ public:
                 g.fillRect (x, y, 1.0f, 3.0f);
         }
 
-        // playhead (timeline position mapped back to the file)
+        // playhead: where in the file it's playing (also through loops)
         for (auto& v : editor.controller.getEngine().getVoices())
             if (v.cueId == editor.cueId)
             {
-                double t = std::fmod (v.position, std::max (1.0e-6, c->playLength (audio->seconds())));
-                double file = in;
-                for (auto& s : segments)
-                {
-                    if (t < s.length()) { file = s.start + t; break; }
-                    t -= s.length();
-                    file = s.end;
-                }
                 g.setColour (Look::amber);
-                g.fillRect (xOf (file) - 1.0f, r.getY(), 2.0f, r.getHeight());
+                g.fillRect (xOf (v.filePosition) - 1.0f, r.getY(), 2.0f, r.getHeight());
             }
     }
 
@@ -782,7 +827,28 @@ WaveformEditor::WaveformEditor (ShowController& c) : controller (c)
     pasteButton.setTooltip ("Play the copy again at the dashed cursor (Ctrl+V). Same song only.");
     splitButton.setTooltip ("Make the selection a new button of its own (the next empty one). With nothing selected, split at the "
                             "dashed cursor: this button ends there and the rest goes to a new button.");
-    for (auto* b : { &cutButton, &copyButton, &pasteButton, &splitButton })
+    setLoopButton.onClick = [this] { setLoopPoints(); };
+    clearLoopButton.onClick = [this] { clearLoopPoints(); };
+    setLoopButton.setTooltip ("Loop points from the selection (or from the dashed cursor to Out). Drag the green markers to change them. "
+                              "A button set to Loop plays by them; without them the whole clip loops.");
+    clearLoopButton.setTooltip ("Remove the loop points: Loop plays the whole clip again");
+    loopStart.addItem ("Starts at In", 1);
+    loopStart.addItem ("Starts at Loop In", 2);
+    loopStart.setTooltip ("Loop: where a looping play starts: at In (the part before the loop plays once, as an intro) or straight at Loop In");
+    loopStart.setWantsKeyboardFocus (false);
+    loopStart.onChange = [this]
+    {
+        auto* c = cue();
+        const bool fromLoopIn = loopStart.getSelectedId() == 2;
+        if (c == nullptr || c->loopFromLoopIn == fromLoopIn)
+            return;
+        beginEdit();
+        c->loopFromLoopIn = fromLoopIn;
+        edited();
+        endEdit();
+    };
+    addAndMakeVisible (loopStart);
+    for (auto* b : { &cutButton, &copyButton, &pasteButton, &splitButton, &setLoopButton, &clearLoopButton })
     {
         b->setWantsKeyboardFocus (false);
         addAndMakeVisible (b);
@@ -825,7 +891,8 @@ WaveformEditor::WaveformEditor (ShowController& c) : controller (c)
         addAndMakeVisible (f);
     }
     hint.setColour (juce::Label::textColourId, Look::textDim);
-    hint.setFont (Look::font (12.0f));
+    hint.setFont (Look::font (11.0f));
+    hint.setMinimumHorizontalScale (0.85f);
     addAndMakeVisible (hint);
 }
 
@@ -1195,6 +1262,10 @@ void WaveformEditor::refreshFields()
     const bool has = c != nullptr && ! c->isEmpty() && audio() != nullptr;
     for (auto* f : { &inField, &outField })
         f->setEnabled (has);
+    setLoopButton.setEnabled (has);
+    clearLoopButton.setEnabled (has && c->hasLoopPoints());
+    loopStart.setEnabled (has);
+    loopStart.setSelectedId (c != nullptr && c->loopFromLoopIn ? 2 : 1, juce::dontSendNotification);
     if (! has)
     {
         for (auto* f : { &inField, &outField })
@@ -1273,7 +1344,9 @@ void WaveformEditor::playPreview (bool fromCursor)
     if (c == nullptr || a == nullptr)
         return;
     PlayPlan plan;
-    if (! PlayPlan::make (*c, *a, cueId, plan))
+    Cue once = *c;
+    once.loop = false;   // a preview plays the clip as trimmed (the cursor is a position in that)
+    if (! PlayPlan::make (once, *a, cueId, plan))
         return;
     previewFromCursor = fromCursor;
     if (fromCursor && cursor >= 0.0)
@@ -1327,13 +1400,60 @@ void WaveformEditor::resized()
 
     auto field = [&footer] (juce::Label& label, juce::Label& f)
     {
-        label.setBounds (footer.removeFromLeft (40));
+        label.setBounds (footer.removeFromLeft (28));
         footer.removeFromLeft (4);
-        f.setBounds (footer.removeFromLeft (86));
+        f.setBounds (footer.removeFromLeft (82));
         footer.removeFromLeft (8);
     };
     field (inLabel, inField);
     field (outLabel, outField);
-    footer.removeFromLeft (8);
+    footer.removeFromLeft (4);
+    setLoopButton.setBounds (footer.removeFromLeft (110));
+    footer.removeFromLeft (3);
+    clearLoopButton.setBounds (footer.removeFromLeft (74));
+    footer.removeFromLeft (3);
+    loopStart.setBounds (footer.removeFromLeft (132));
+    footer.removeFromLeft (10);
     hint.setBounds (footer);
+}
+
+bool WaveformEditor::setLoopPoints()
+{
+    auto* c = cue();
+    auto a = audio();
+    if (c == nullptr || a == nullptr)
+        return false;
+    juce::Range<double> loop;
+    if (hasSelection())
+        loop = selection;
+    else
+    {
+        const double from = cursor >= 0.0 && cursor < playOut() - 0.05 ? cursor : playIn();
+        loop = { from, playOut() };
+    }
+    loop = { snapToZero (*a, loop.getStart()), snapToZero (*a, loop.getEnd()) };
+    if (loop.getLength() < 0.05)
+    {
+        showHint ("The loop must be at least 0.05 s long.");
+        return false;
+    }
+    beginEdit();
+    c->loopIn = loop.getStart();
+    c->loopOut = loop.getEnd();
+    edited();
+    endEdit();
+    showHint ("Loop points set: drag the green flags to change them. " + juce::String (c->loop ? "This button loops by them."
+                                                                                              : "Set the button to Loop (right-click it) to play by them."));
+    return true;
+}
+
+void WaveformEditor::clearLoopPoints()
+{
+    auto* c = cue();
+    if (c == nullptr || ! c->hasLoopPoints())
+        return;
+    beginEdit();
+    c->loopIn = c->loopOut = -1.0;
+    edited();
+    endEdit();
 }
