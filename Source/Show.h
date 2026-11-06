@@ -2,10 +2,15 @@
 #include "Cue.h"
 #include "CueAudio.h"
 #include "PlaybackEngine.h"
+#include "ShowCheck.h"
 #include <juce_events/juce_events.h>
+#include <optional>
 #include <map>
 #include <memory>
 #include <set>
+
+/** "5:00", "1:02:30". */
+juce::String durationText (double seconds);
 
 /** What happens when a playlist song ends. */
 enum class Transition { stop = 0, playNext, crossfade, loopUntil, wait };
@@ -32,6 +37,38 @@ struct Playlist
     juce::String displayName (int index) const { return name.isEmpty() ? "Playlist " + juce::String (index + 1) : name; }
 };
 
+
+/** One line of the run of show: a person and song, or just a note (cueId -1). */
+struct RunRow
+{
+    int cueId = -1;                 // the button GO plays, -1 = a note: GO just moves on
+    juce::String time, person, notes;
+    int uid = 0;                    // runtime only
+
+    juce::var toVar() const;
+    static RunRow fromVar (const juce::var& v);
+};
+
+/** A button that starts by itself: at a time of day, or a delay after the schedule's Start. */
+struct ScheduleItem
+{
+    enum Kind { clock = 0, delay };
+    enum State { waiting = 0, fired, missed, defeated };   // defeated: GO pressed during a hold
+
+    int cueId = -1;
+    Kind kind = clock;
+    int secondsOfDay = 0;           // clock
+    double delaySeconds = 60.0;     // delay
+    // runtime only
+    int uid = 0;
+    State state = waiting;
+    juce::int64 fireAt = 0;         // ms since 1970
+    bool held = false;
+    double heldSeconds = 0.0;
+
+    juce::var toVar() const;
+    static ScheduleItem fromVar (const juce::var& v);
+};
 /** A show file: banks of buttons and playlists. Saved as JSON (*.stinger); audio files are referenced,
     never copied or changed. */
 struct Show
@@ -46,6 +83,8 @@ struct Show
 
     std::vector<Bank> banks;
     std::vector<Playlist> playlists;
+    std::vector<RunRow> run;
+    std::vector<ScheduleItem> schedule;
     PlaybackMode playbackMode = PlaybackMode::oneAtATime;
     bool selfDestruct = false;   // buttons go black after they've played
 
@@ -69,6 +108,7 @@ struct Show
 /** The show plus its loaded audio, on the message thread: loads files, starts and stops cues,
     and keeps audio alive while the engine still plays it. Broadcasts a change when anything changes. */
 class PluginHost;
+class Autosave;
 
 class ShowController : public juce::ChangeBroadcaster,
                        private juce::Timer
@@ -112,6 +152,10 @@ public:
 
     std::shared_ptr<CueAudio> getAudio (int id) const;
     bool isLoading (int id) const { return loading.count (id) > 0; }
+
+    /** Asked after a sample rate change, once the audio is back: true = the device was lost, so what was playing
+        carries on where it would have been. Otherwise (a rate picked by hand) it stays stopped. */
+    std::function<bool()> resumeAfterRateChange;
     juce::String getError (int id) const;
 
     // Show file
@@ -133,6 +177,35 @@ public:
         Returns the copy, or the file itself if it couldn't be copied. */
     juce::File importFile (const juce::File& file);
     bool hasUnsavedChanges() const { return dirty; }
+
+    /** Everything that would go wrong in the show as it stands: audio that is missing or unreadable, plugins that
+        are not loaded, outputs this device lacks, playlist songs whose button is empty. */
+    std::vector<ShowIssue> checkShow() const;
+    /** Points every button using `from` at `to`, keeping its trims, cuts and settings, and loads it. */
+    void relinkFile (juce::File from, const juce::File& to);
+
+    // ---- Autosave + crash recovery ----
+    /** Where recovery copies go (null = no autosaving). Must outlive this controller or be cleared first. */
+    void setAutosave (Autosave* a) { autosave = a; }
+    /** Opens a recovery copy: the show as it was (black Self Destruct buttons, Next positions) under its own name, unsaved. */
+    bool openRecovery (const juce::File& recoveryFile, juce::String& error);
+    /** Call often (the controller's timer does): every autosaveMs while there are unsaved changes, at once when a
+        button goes black. Plugin settings are read only when nothing is playing (a plugin can glitch if asked for
+        them while it runs); the rest is a copy in memory, written by Autosave's own thread. */
+    void updateAutosave();
+
+    // ---- Backup laptop ----
+    /** Where the show stands: selected playlist, Next positions, run of show, schedule. */
+    juce::var positionVar() const;
+    void applyPosition (const juce::var& position);
+    /** While on, this laptop follows another: its schedule, Self Destruct and autosave leave everything to the main one. */
+    void setMirroring (bool on);
+    bool isMirroring() const { return mirroring; }
+    /** Takes on a show sent from the main laptop, reloading only what changed. Every file path goes through localFile. */
+    void applyMirror (const juce::var& incoming, const std::function<juce::File (const juce::File&)>& localFile);
+    /** Starts a button from a place in it, leaving whatever else plays alone. */
+    void playMirrored (int id, double position, bool looping);
+    void setAutosaveIntervalForTest (juce::uint32 ms) { autosaveMs = ms; }
 
     /** For tests: load a cue's audio now, on this thread. */
     bool loadNow (int id, juce::String& error);
@@ -226,6 +299,59 @@ public:
     /** Call often (the controller's timer does): Self Destruct turns buttons black once they stop. */
     void updateSelfDestruct();
 
+    /** The newest song playing (several at once: the latest started). */
+    struct Playing { bool any = false; double left = 0.0; juce::String name; bool looping = false; };
+    Playing newestVoice() const;
+
+    // ---- Run of show ----
+    int addRunRow (const RunRow& row, int insertAt = -1);
+    void removeRunRow (int index);
+    void moveRunRow (int from, int to);
+    void setRunRow (int index, const RunRow& row);
+    int getRunNext() const { return runIndexOf (runNextUid); }
+    int getRunOnAir() const { return runIndexOf (runOnAirUid); }
+    void setRunNext (int index);
+    /** Plays the next row's button (a note just moves on) and moves Next down one. */
+    void runGo();
+
+    // ---- Schedule ----
+    enum class Urgency { green, yellow, red };   // the countdown: red in the last 10 s, yellow in the last minute
+    void addScheduleItem (const ScheduleItem& item);
+    void removeScheduleItem (int index);
+    void setScheduleItem (int index, const ScheduleItem& item);
+    /** Starts the countdown. Times already past are marked missed: nothing ever fires late. */
+    void startSchedule();
+    void stopSchedule();
+    bool isScheduleRunning() const { return scheduleRunning; }
+    /** The next trigger (index), -1 = none. */
+    int getNextScheduled() const;
+    double getScheduleRemaining() const;
+    Urgency getScheduleUrgency() const;
+    juce::String getScheduleName (int index) const;
+    int getMissedCount() const;
+    /** Pushes the next trigger back by this many minutes (holds add up). */
+    void holdSchedule (int minutes);
+    /** Fires the next trigger now. */
+    void scheduleGoNow();
+    /** A GO was pressed: if the next trigger is on a hold, its countdown is defeated (it never fires). */
+    void goPressed();
+    /** Call often (the controller's timer does). */
+    void updateSchedule();
+    std::function<juce::int64()> clockForTest;
+
+    // ---- Loudness ----
+    /** Targets in LUFS: music, and voice-over (lower: speech sounds louder than a full song at the same reading). */
+    void setLoudnessTargets (double music, double voice) { musicTarget = music; voiceTarget = voice; sendChangeMessage(); }
+    double getMusicTarget() const { return musicTarget; }
+    double getVoiceTarget() const { return voiceTarget; }
+    /** The level this button needs to reach its target, if it has been measured. */
+    std::optional<float> suggestedLevel (int id) const;
+    /** Sets the level to the suggestion. */
+    void applyLoudness (int id);
+    /** Measures buttons whose audio or trims changed, one at a time in the background (the timer calls this). */
+    void updateLoudness();
+    bool isMeasuring() const { return measuring; }
+
 private:
     const Playlist* playlistAt (int index) const;
     int indexOfUid (int playlist, int uid) const;
@@ -264,6 +390,34 @@ private:
     void moveUnsavedAudio (const juce::File& audioFolder);
     std::set<int> destructing;   // buttons seen playing in Self Destruct mode: black once they stop
     bool dirty = false;
+    Autosave* autosave = nullptr;
+    juce::uint32 autosaveMs = 30000, lastAutosave = 0;
+    bool autosaveNow = false;
+    bool mirroring = false;
+    juce::String savedPosition;
+    void markPositionSaved();
+
+    struct KeptVoice { int cueId = -1, tag = 0; double position = 0.0; bool looping = false; };
+    std::vector<KeptVoice> resumeVoices;    // what was playing when the rate changed
+    juce::uint32 lastVoicesMs = 0;
+    bool resumePending = false;
+    void resumeKeptVoices();
+
+    // run of show + schedule
+    int runIndexOf (int uid) const;
+    void assignRunUids();
+    juce::int64 nowMs() const;
+    void armItem (ScheduleItem& s, juce::int64 now);
+    void fireItem (ScheduleItem& s);
+    int runNextUid = 0, runOnAirUid = 0;
+    bool scheduleRunning = false;
+
+    // loudness
+    double musicTarget = -16.0, voiceTarget = -20.0;
+    bool measuring = false;
+    juce::ThreadPool loudnessPool { juce::ThreadPoolOptions{}.withNumberOfThreads (1).withThreadName ("Loudness") };
+    std::shared_ptr<std::atomic<bool>> loudnessAlive = std::make_shared<std::atomic<bool>> (true);
+    juce::var recoveryVar() const;
 
     int selectedPlaylist = 0;
     int lastUid = 0, lastTag = 0;

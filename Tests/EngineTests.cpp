@@ -5,6 +5,11 @@
 #include "Show.h"
 #include "StreamDeckServer.h"
 #include "Downloader.h"
+#include "Autosave.h"
+#include "DeviceWatch.h"
+#include "Loudness.h"
+#include "OscBridge.h"
+#include "BackupLink.h"
 #include <cstdio>
 
 namespace
@@ -638,6 +643,816 @@ static void testSelfDestruct()
     sc.play (0);
     tick (40);
     check (! show.cue (0).spent, "mode off again: colours stay");
+}
+
+static void testShowCheck()
+{
+    std::puts ("Show check");
+    const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("StingerCheckTest");
+    folder.deleteRecursively();
+    folder.getChildFile ("Moved").getChildFile ("Deeper").createDirectory();
+    const auto real = folder.getChildFile ("real.wav");
+    const auto moved = folder.getChildFile ("Moved").getChildFile ("Deeper").getChildFile ("Gone.WAV");
+    real.replaceWithText ("x");
+    moved.replaceWithText ("x");
+
+    PlaybackEngine e;
+    e.prepareForTest (rate, 2);
+    ShowController sc (e);
+    auto& show = sc.getShow();
+    auto kinds = [&sc] (ShowIssue::Kind k) { int n = 0; for (auto& i : sc.checkShow()) n += i.kind == k ? 1 : 0; return n; };
+
+    check (sc.checkShow().empty(), "an empty show is fine");
+    show.cue (0) = monoOut (0);
+    show.cue (0).file = real;
+    check (sc.checkShow().empty(), "a good button is fine");
+
+    show.cue (1) = monoOut (0);
+    show.cue (1).file = folder.getChildFile ("gone.wav");
+    show.cue (1).trimIn = 0.02;
+    show.cue (1).name = "Walk-in";
+    show.cue (2) = show.cue (1);   // two buttons sharing a file
+    check (kinds (ShowIssue::Kind::missingAudio) == 2, "missing audio is reported per button");
+
+    show.cue (3) = monoOut (5);
+    show.cue (3).file = real;
+    check (kinds (ShowIssue::Kind::noSuchOutput) == 1, "an output this device doesn't have");
+    show.cue (3).output = {};
+
+    show.cue (3).plugins[1].description = "<PLUGIN name=\"Some Reverb\"/>";
+    check (kinds (ShowIssue::Kind::missingPlugin) == 1, "a plugin that isn't loaded");
+    show.cue (3).plugins[1] = {};
+
+    sc.addToPlaylist (0, 7);
+    check (kinds (ShowIssue::Kind::emptyEntry) == 1, "a playlist song whose button is empty");
+    sc.removeEntry (0, 0);
+
+    FileSearch search;
+    search.start ({ "gone.wav", "never there.wav" }, { folder });
+    for (int i = 0; i < 6000 && search.isSearching(); ++i)
+        juce::Thread::sleep (5);
+    const auto found = search.takeFound();
+    check (found.size() == 1 && found.count ("gone.wav") == 1 && found.at ("gone.wav") == moved,
+           "the search finds a file by name, any case, in folders inside folders");
+    check (! search.isSearching(), "the search ends by itself");
+
+    sc.relinkFile (show.cue (1).file, moved);
+    check (show.cue (1).file == moved && show.cue (2).file == moved, "both buttons follow the found file");
+    check (near ((float) show.cue (1).trimIn, 0.02f) && show.cue (1).name == "Walk-in", "the button keeps its trims and name");
+    check (sc.hasUnsavedChanges(), "that's a change to save");
+    check (kinds (ShowIssue::Kind::missingAudio) == 0, "nothing missing any more");
+    for (int i = 0; i < 400 && sc.getLoader().pending() > 0; ++i)
+        juce::Thread::sleep (5);
+    search.start ({ "x.wav" }, FileSearch::wholeComputer());
+    juce::Thread::sleep (20);
+    search.cancel();
+    for (int i = 0; i < 6000 && search.isSearching(); ++i)
+        juce::Thread::sleep (5);
+    check (! search.isSearching(), "a search can be stopped");
+    folder.deleteRecursively();
+}
+
+static void testDeviceLoss()
+{
+    std::puts ("Device loss");
+    {
+        PlaybackEngine e;
+        e.prepareForTest (rate, 8);
+        Outputs out (8);
+        auto ramp = makeAudio (1, 4.0, [] (int, int i) { return (float) i / 192000.0f; });
+
+        PlayPlan plan;
+        auto c = monoOut (6);
+        PlayPlan::make (c, *ramp, 0, plan);
+        e.play (plan);
+        out.run (e, 10);
+        check (e.getVoices().size() == 1 && near ((float) e.getVoices()[0].position, 0.1f, 0.02f), "playing at 0.1 s");
+        e.advanceVoices ((juce::int64) (rate * 1.5));
+        out.run (e, 10);
+        check (near ((float) e.getVoices()[0].position, 1.7f, 0.02f), "after a 1.5 s dropout the song is where it would have been");
+        check (out.at (6) > 0.3f, "and it's sounding from that place");
+        e.advanceVoices ((juce::int64) (rate * 10.0));
+        out.run (e, 2);
+        check (e.getVoices().empty(), "a song that would have finished by now is done");
+
+        // loops wrap
+        auto l = monoOut (0);
+        l.loop = true;
+        PlayPlan::make (l, *ramp, 0, plan);
+        plan.loop = true;
+        e.play (plan);
+        out.run (e, 5);
+        e.advanceVoices ((juce::int64) (rate * 9.0));
+        out.run (e, 5);
+        check (e.getVoices().size() == 1 && near ((float) e.getVoices()[0].position, 1.1f, 0.05f), "a loop wraps round");
+        e.stopAll (false);
+        out.run (e, 2);
+
+        // routing on the backup
+        auto c2 = monoOut (6);
+        PlayPlan::make (c2, *ramp, 0, plan);
+        e.setBackupRouting (true, 2);
+        e.play (plan);
+        out.run (e, 20);
+        check (out.at (2) > 0.0f && out.at (3) > 0.0f && std::abs (out.at (6)) < 1.0e-6f, "a chosen backup output takes every song");
+        e.stopAll (false);
+        out.run (e, 2);
+    }
+    {
+        PlaybackEngine e;
+        e.prepareForTest (rate, 2);
+        Outputs out (2);
+        auto ramp = constant (1, 1.0, 0.25f);
+        PlayPlan plan;
+        auto c = monoOut (6);
+        PlayPlan::make (c, *ramp, 0, plan);
+        e.setBackupRouting (true, -1);
+        e.play (plan);
+        out.run (e, 20);
+        check (out.at (0) > 0.1f, "a backup with fewer outputs: the song comes out of 1-2, not silence");
+        e.setBackupRouting (false, -1);
+        out.run (e, 1);
+        check (std::abs (out.at (0)) < 1.0e-6f, "back on the main device: its own output again");
+        e.stopAll (false);
+        out.run (e, 2);
+    }
+    {
+        // a backup at another sample rate: the audio reloads, then the song restarts where it would be
+        const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("StingerDeviceTest");
+        folder.deleteRecursively();
+        folder.createDirectory();
+        const auto wav = folder.getChildFile ("song.wav");
+        {
+            juce::AudioBuffer<float> buffer (1, 480000);
+            for (int i = 0; i < 480000; ++i)
+                buffer.setSample (0, i, 0.25f);
+            juce::WavAudioFormat format;
+            std::unique_ptr<juce::AudioFormatWriter> writer (format.createWriterFor (new juce::FileOutputStream (wav), 48000.0, 1, 24, {}, 0));
+            writer->writeFromAudioSampleBuffer (buffer, 0, 480000);
+        }
+        PlaybackEngine e;
+        e.prepareForTest (rate, 2);
+        Outputs out (2);
+        ShowController sc (e);
+        sc.getShow().cue (0) = monoOut (0);
+        sc.getShow().cue (0).file = wav;
+        juce::String error;
+        check (sc.loadNow (0, error), "song loaded");
+        bool lost = false;
+        sc.resumeAfterRateChange = [&lost] { return lost; };
+        auto pump = [&] (int ms)
+        {
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (ms);
+            out.run (e, 1);
+        };
+        sc.play (0);
+        for (int i = 0; i < 10; ++i) { out.run (e, 10); pump (30); }
+        check (e.getVoices().size() == 1, "playing before the change");
+
+        // a rate picked by hand: stopped, as it always was
+        e.prepareForTest (44100.0, 2);
+        for (int i = 0; i < 40 && sc.isLoading (0) == false; ++i) pump (20);
+        for (int i = 0; i < 400 && sc.isLoading (0); ++i) pump (20);
+        pump (150);
+        check (e.getVoices().empty(), "a rate changed by hand stops playback");
+
+        sc.play (0);
+        for (int i = 0; i < 10; ++i) { out.run (e, 10); pump (30); }
+        check (e.getVoices().size() == 1, "playing again at the new rate");
+        const auto before = e.getVoices()[0].position;
+        lost = true;
+        e.prepareForTest (rate, 2);
+        for (int i = 0; i < 40 && sc.isLoading (0) == false; ++i) pump (20);
+        for (int i = 0; i < 400 && sc.isLoading (0); ++i) pump (20);
+        for (int i = 0; i < 40 && e.getVoices().empty(); ++i) pump (30);
+        const auto voices = e.getVoices();
+        check (voices.size() == 1, "the device lost and the rate different: the song plays again");
+        check (! voices.empty() && voices[0].position > before - 0.3, "from where it was, not from the top (the test runs audio faster than real time)");
+        e.stopAll (false);
+        out.run (e, 2);
+        folder.deleteRecursively();
+    }
+}
+
+static void testLoudness()
+{
+    std::puts ("Loudness");
+    auto sine = [] (int channels, double seconds, double dbfs)
+    {
+        const double a = std::pow (10.0, dbfs / 20.0), w = juce::MathConstants<double>::twoPi * 997.0 / rate;
+        return makeAudio (channels, seconds, [a, w] (int, int i) { return (float) (a * std::sin (w * i)); });
+    };
+    // the EBU reference: a stereo 1 kHz sine at -23 dBFS reads -23 LUFS
+    auto reference = sine (2, 20.0, -23.0);
+    const auto all = std::vector<Segment> { { 0.0, 20.0 } };
+    auto r = measureLoudness (*reference, all);
+    std::printf ("  stereo -23 dBFS sine: %.2f LUFS, peak %.2f\n", r.lufs, r.peakDb);
+    check (std::abs (r.lufs - -23.0) < 0.1, "reference tone reads -23.0 LUFS");
+    check (std::abs (r.peakDb - -23.0) < 0.05, "and its peak");
+    auto mono = measureLoudness (*sine (1, 20.0, -23.0), all);
+    check (std::abs (mono.lufs - -26.0) < 0.1, "the same tone on one channel reads 3 LU lower");
+
+    // only what's trimmed counts: quiet first half, loud second half
+    auto half = makeAudio (2, 20.0, [] (int, int i)
+    {
+        const double a = std::pow (10.0, (i < 480000 ? -40.0 : -20.0) / 20.0);
+        return (float) (a * std::sin (juce::MathConstants<double>::twoPi * 997.0 / rate * i));
+    });
+    auto loud = measureLoudness (*half, { { 10.0, 20.0 } });
+    check (std::abs (loud.lufs - -20.0) < 0.15, "a trimmed song is measured by what plays");
+    auto gated = measureLoudness (*half, all);
+    check (std::abs (gated.lufs - -20.0) < 0.3, "quiet passages far below the song are gated out");
+    check (! measureLoudness (*constant (2, 5.0, 0.0f), all).isValid(), "silence has no reading");
+    check (! measureLoudness (*sine (2, 0.2, -20.0), { { 0.0, 0.2 } }).isValid(), "too short to measure");
+
+    PlaybackEngine e;
+    e.prepareForTest (rate, 2);
+    ShowController sc (e);
+    auto& show = sc.getShow();
+    show.cue (0) = monoOut (0);
+    show.cue (0).file = juce::File::getCurrentWorkingDirectory().getChildFile ("music.wav");
+    sc.setAudioForTest (0, sine (2, 20.0, -20.0));
+    show.cue (1) = show.cue (0);
+    show.cue (1).voiceOver = true;
+    sc.setAudioForTest (1, sine (2, 20.0, -20.0));
+    auto waitFor = [&sc] (int cue, const juce::String& not_)
+    {
+        for (int i = 0; i < 300 && sc.getShow().cue (cue).lufsKey == not_; ++i)
+        {
+            sc.updateLoudness();
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (10);
+        }
+    };
+    waitFor (0, {});
+    waitFor (1, {});
+    check (std::abs (show.cue (0).lufs - -20.0) < 0.1, "measured in the background after loading");
+    const auto music = sc.suggestedLevel (0), voice = sc.suggestedLevel (1);
+    check (music.has_value() && near (*music, 4.0f, 0.1f), "music: suggests reaching -16 LUFS");
+    check (voice.has_value() && near (*voice, 0.0f, 0.1f), "voice-over: its own, lower target");
+    check (near (show.cue (0).levelDb, 0.0f), "nothing changes until it's applied");
+    sc.applyLoudness (0);
+    check (near (show.cue (0).levelDb, 4.0f, 0.1f), "Apply sets the level");
+
+    const auto key = show.cue (0).lufsKey;
+    show.cue (0).trimOut = 12.0;
+    waitFor (0, key);
+    check (show.cue (0).lufsKey != key, "new trims are measured again");
+    auto saved = Cue::fromVar (juce::JSON::parse (juce::JSON::toString (show.cue (1).toVar())));
+    check (saved.voiceOver && saved.lufsKey == show.cue (1).lufsKey && saved.lufs < 0.0, "kind and reading are saved with the button");
+    sc.setLoudnessTargets (-14.0, -18.0);
+    check (near (*sc.suggestedLevel (1), 2.0f, 0.1f), "targets can be changed");
+}
+
+static void testRunOfShow()
+{
+    std::puts ("Run of show");
+    PlaybackEngine e;
+    e.prepareForTest (rate, 2);
+    Outputs out (2);
+    ShowController sc (e);
+    auto& show = sc.getShow();
+    for (int i = 0; i < 2; ++i)
+    {
+        show.cue (i) = monoOut (0);
+        show.cue (i).file = juce::File::getCurrentWorkingDirectory().getChildFile ("song" + juce::String (i) + ".wav");
+        sc.setAudioForTest (i, constant (1, 2.0, 0.2f));
+    }
+    sc.addRunRow ({ 0, "7:00", "Host", "Opening" });
+    sc.addRunRow ({ -1, "7:05", "Dr. Lee", "Speech, 10 minutes" });
+    sc.addRunRow ({ 1, "7:15", "Award winner", {} });
+    check (sc.getRunNext() == 0 && sc.getRunOnAir() < 0, "starts at the top");
+    sc.runGo();
+    out.run (e, 2);
+    check (e.isCuePlaying (0) && sc.getRunNext() == 1 && sc.getRunOnAir() == 0, "GO plays the row and moves on");
+    sc.runGo();
+    out.run (e, 2);
+    check (e.isCuePlaying (0) && sc.getRunNext() == 2 && sc.getRunOnAir() == 1, "a note plays nothing and moves on");
+    sc.runGo();
+    out.run (e, 8);
+    check (e.isCuePlaying (1) && sc.getRunNext() < 0, "the last row: nothing left");
+    sc.runGo();
+    check (sc.getRunOnAir() == 2, "GO past the end does nothing");
+    sc.setRunNext (1);
+    check (sc.getRunNext() == 1, "Next can be set by hand");
+    sc.moveRunRow (2, 0);
+    check (show.run[0].person == "Award winner" && sc.getRunNext() == 2, "Next stays on its row when rows move");
+    sc.swapCues (0, 1);
+    check (show.run[0].cueId == 0 && show.run[1].cueId == 1 && show.run[2].cueId == -1, "rows follow swapped buttons");
+    Show copy;
+    copy.fromVar (juce::JSON::parse (juce::JSON::toString (show.toVar())));
+    check (copy.run.size() == 3 && copy.run[2].notes == "Speech, 10 minutes" && copy.run[1].time == "7:00", "saved in the show");
+    sc.removeRunRow (2);
+    check (sc.getRunNext() < 0, "removing the Next row");
+    e.stopAll (false);
+    out.run (e, 2);
+}
+
+static void testSchedule()
+{
+    std::puts ("Schedule");
+    PlaybackEngine e;
+    e.prepareForTest (rate, 2);
+    Outputs out (2);
+    ShowController sc (e);
+    juce::int64 now = juce::Time (2026, 10, 6, 19, 0, 0, 0, true).toMilliseconds();
+    sc.clockForTest = [&now] { return now; };
+    auto& show = sc.getShow();
+    for (int i = 0; i < 4; ++i)
+    {
+        show.cue (i) = monoOut (0);
+        show.cue (i).name = "Song " + juce::String (i);
+        show.cue (i).file = juce::File::getCurrentWorkingDirectory().getChildFile ("song" + juce::String (i) + ".wav");
+        sc.setAudioForTest (i, constant (1, 30.0, 0.2f));
+    }
+    show.playbackMode = PlaybackMode::overlap;
+    auto clockItem = [] (int cue, int h, int m) { ScheduleItem s; s.cueId = cue; s.kind = ScheduleItem::clock; s.secondsOfDay = h * 3600 + m * 60; return s; };
+    auto delayItem = [] (int cue, double seconds) { ScheduleItem s; s.cueId = cue; s.kind = ScheduleItem::delay; s.delaySeconds = seconds; return s; };
+    auto advance = [&] (double seconds) { now += (juce::int64) (seconds * 1000.0); sc.updateSchedule(); out.run (e, 2); };
+    using U = ShowController::Urgency;
+
+    sc.addScheduleItem (clockItem (0, 18, 0));   // already past
+    sc.addScheduleItem (clockItem (1, 19, 5));
+    sc.addScheduleItem (delayItem (2, 120.0));
+    check (sc.getNextScheduled() == -1, "nothing runs before Start");
+    advance (1.0);
+    now -= 1000;
+    sc.startSchedule();
+    check (show.schedule[0].state == ScheduleItem::missed && sc.getMissedCount() == 1, "a time already past is missed");
+    advance (10.0);
+    check (! e.isCuePlaying (0), "and it never fires late");
+    check (sc.getNextScheduled() == 2 && near ((float) sc.getScheduleRemaining(), 110.0f, 0.1f), "the delay counts from Start, next in line");
+    check (sc.getScheduleUrgency() == U::green, "green when started");
+    advance (55.0);
+    check (sc.getScheduleUrgency() == U::yellow, "yellow at 1 minute");
+    advance (46.0);
+    check (sc.getScheduleUrgency() == U::red, "red at 10 seconds");
+    advance (10.0);
+    check (e.isCuePlaying (2) && show.schedule[2].state == ScheduleItem::fired, "fires on time");
+    check (sc.getNextScheduled() == 1, "on to the next trigger");
+
+    // holds
+    now = juce::Time (2026, 10, 6, 19, 4, 50, 0, true).toMilliseconds();
+    check (sc.getScheduleUrgency() == U::red, "10 seconds to go");
+    sc.holdSchedule (2);
+    check (near ((float) sc.getScheduleRemaining(), 130.0f, 0.1f) && sc.getScheduleUrgency() == U::green, "a 2 minute hold adds 2 minutes");
+    sc.holdSchedule (5);
+    check (near ((float) sc.getScheduleRemaining(), 430.0f, 0.1f), "holds add up");
+    advance (11.0);
+    check (! e.isCuePlaying (1), "held: doesn't fire at its old time");
+    sc.go (0);
+    check (show.schedule[1].state == ScheduleItem::defeated && sc.getNextScheduled() == -1, "GO during a hold defeats the countdown");
+    advance (500.0);
+    check (! e.isCuePlaying (1), "a defeated trigger never fires");
+
+    sc.stopSchedule();
+    sc.setScheduleItem (1, delayItem (3, 60.0));
+    sc.startSchedule();
+    sc.holdSchedule (1);
+    sc.trigger (3);
+    check (show.schedule[1].state == ScheduleItem::defeated, "its own button pressed during a hold defeats it too");
+    sc.stopSchedule();
+    e.stopAll (false);
+    out.run (e, 2);
+
+    sc.setScheduleItem (1, delayItem (3, 60.0));
+    sc.startSchedule();
+    sc.go (0);
+    check (show.schedule[1].state == ScheduleItem::waiting, "GO with no hold leaves the countdown running");
+    sc.scheduleGoNow();
+    out.run (e, 2);
+    check (e.isCuePlaying (3) && show.schedule[1].state == ScheduleItem::fired, "the countdown's own GO fires it now");
+    sc.stopSchedule();
+    e.stopAll (false);
+    out.run (e, 2);
+
+    // a stalled PC: long past the time, it doesn't fire
+    sc.setScheduleItem (1, delayItem (3, 5.0));
+    sc.startSchedule();
+    advance (30.0);
+    check (! e.isCuePlaying (3) && show.schedule[1].state == ScheduleItem::missed, "woken long after its time: missed, not late");
+    sc.stopSchedule();
+    sc.setScheduleItem (1, delayItem (3, 5.0));
+    sc.startSchedule();
+    sc.trigger (3);
+    out.run (e, 2);
+    advance (5.0);
+    check (e.isCuePlaying (3) && show.schedule[1].state == ScheduleItem::fired, "already playing at its time: left alone");
+    sc.stopSchedule();
+    {
+        // nothing fires during a hold; a trigger beyond the hold keeps its time
+        auto e2 = std::make_unique<PlaybackEngine>();
+        e2->prepareForTest (rate, 2);
+        ShowController hold (*e2);
+        hold.clockForTest = [&now] { return now; };
+        const auto a = delayItem (0, 60.0), b = delayItem (1, 120.0), c = delayItem (2, 3600.0);
+        hold.addScheduleItem (a);
+        hold.addScheduleItem (b);
+        hold.addScheduleItem (c);
+        hold.startSchedule();
+        const auto far = hold.getShow().schedule[2].fireAt;
+        hold.holdSchedule (5);
+        const auto& list = hold.getShow().schedule;
+        check (list[1].fireAt > list[0].fireAt, "a trigger landing inside a hold moves with it");
+        check (list[2].fireAt == far, "one beyond the hold keeps its time");
+        check (hold.getNextScheduled() == 0, "the held trigger is still next");
+    }
+
+    Show copy;
+    copy.fromVar (juce::JSON::parse (juce::JSON::toString (show.toVar())));
+    check (copy.schedule.size() == 3 && copy.schedule[1].cueId == 3 && copy.schedule[0].secondsOfDay == 18 * 3600, "saved in the show");
+
+    // crash in the middle of a countdown
+    const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("StingerScheduleTest");
+    folder.deleteRecursively();
+    {
+        Autosave autosave (folder);
+        sc.setAutosave (&autosave);
+        sc.addRunRow ({ 0, {}, "Host", {} });
+        sc.addRunRow ({ 1, {}, "Guest", {} });
+        sc.runGo();
+        sc.setScheduleItem (1, delayItem (3, 300.0));
+        sc.startSchedule();
+        sc.holdSchedule (2);
+        sc.setAutosaveIntervalForTest (0);
+        sc.setSelfDestruct (true);
+        sc.updateAutosave();
+        for (int i = 0; i < 6000 && ! autosave.isIdle(); ++i)
+            juce::Thread::sleep (5);
+        sc.setAutosave (nullptr);
+    }
+    {
+        ShowController back (e);
+        back.clockForTest = sc.clockForTest;
+        juce::String error;
+        check (back.openRecovery (Autosave::fileIn (folder), error), "recovers");
+        check (back.isScheduleRunning() && back.getNextScheduled() == 2 && near ((float) back.getScheduleRemaining(), 240.0f, 1.0f),
+               "a running countdown comes back, hold included");
+        check (back.getRunNext() == 1 && back.getRunOnAir() == 0, "the run of show keeps its place");
+    }
+    {
+        now += 3600000;
+        ShowController back (e);
+        back.clockForTest = sc.clockForTest;
+        juce::String error;
+        back.openRecovery (Autosave::fileIn (folder), error);
+        check (back.getNextScheduled() < 0 && back.getMissedCount() >= 1, "recovered after its time: missed, not fired");
+    }
+    e.stopAll (false);
+    out.run (e, 2);
+    folder.deleteRecursively();
+}
+
+static void testOsc()
+{
+    std::puts ("OSC");
+    auto action = [] (const char* address, std::optional<int> value = {})
+    {
+        juce::OSCMessage m { juce::OSCAddressPattern (address) };
+        if (value)
+            m.addInt32 (*value);
+        return OscBridge::actionFor (m);
+    };
+    check (action ("/stinger/go") == "go", "GO");
+    check (action ("/stinger/go/2") == "go2" && action ("/stinger/go", 3) == "go3", "GO a playlist, by address or value");
+    check (action ("/stinger/stop") == "stopAll" && action ("/stinger/fade") == "fadeAll" && action ("/stinger/fadenext") == "fadeNext", "stop, fade, fade to next");
+    check (action ("/stinger/slot/5") == "slot5", "button of the shown bank");
+    check (action ("/stinger/cue/2/3") == "cue:" + juce::String (Show::cueId (1, 2)) && action ("/stinger/cue/b/3") == "cue:" + juce::String (Show::cueId (1, 2)), "bank and button, by number or letter");
+    check (action ("/stinger/bank/2") == "bank2" && action ("/stinger/bank/next") == "bankNext", "banks");
+    check (action ("/stinger/run/go") == "runGo" && action ("/stinger/schedule/start") == "schedStart" && action ("/stinger/hold/5") == "hold5", "run of show, schedule, holds");
+    check (action ("/stinger/go", 1) == "go1" && action ("/stinger/stop", 1) == "stopAll", "a press with value 1");
+    check (action ("/stinger/stop", 0).isEmpty(), "value 0 (the release) is ignored");
+    check (action ("/other/go").isEmpty() && action ("/stinger/nonsense").isEmpty() && action ("/stinger/cue/1/99").isEmpty(), "anything else is ignored");
+
+    // the real thing through UDP
+    constexpr int inPort = 52901, outPort = 52902;
+    PlaybackEngine e;
+    e.prepareForTest (rate, 2);
+    Outputs out (2);
+    ShowController sc (e);
+    sc.getShow().cue (0) = monoOut (0);
+    sc.getShow().cue (0).name = "Walk-in";
+    sc.getShow().cue (0).file = juce::File::getCurrentWorkingDirectory().getChildFile ("x.wav");
+    sc.setAudioForTest (0, constant (1, 2.0, 0.2f));
+
+    OscBridge osc (sc);
+    juce::StringArray performed;
+    osc.perform = [&] (const juce::String& a) { performed.add (a); sc.trigger (0); };
+    osc.shownBank = [] { return 0; };
+    check (osc.start (inPort, "127.0.0.1", outPort), "opens its port");
+
+    struct Listen : juce::OSCReceiver::Listener<juce::OSCReceiver::RealtimeCallback>
+    {
+        void oscMessageReceived (const juce::OSCMessage& m) override
+        {
+            const juce::ScopedLock sl (lock);
+            auto text = m[0].isString() ? m[0].getString() : m[0].isInt32() ? juce::String (m[0].getInt32()) : juce::String (m[0].getFloat32(), 1);
+            got[m.getAddressPattern().toString()] = text;
+        }
+        juce::String value (const juce::String& a) { const juce::ScopedLock sl (lock); return got.count (a) > 0 ? got[a] : juce::String(); }
+        juce::CriticalSection lock;
+        std::map<juce::String, juce::String> got;
+    } listen;
+    juce::OSCReceiver receiver;
+    receiver.addListener (&listen);
+    check (receiver.connect (outPort), "test listener");
+
+    juce::OSCSender desk;
+    desk.connect ("127.0.0.1", inPort);
+    desk.send ("/stinger/slot/1", 1);
+    for (int i = 0; i < 100 && performed.isEmpty(); ++i)
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (10);
+    check (performed.size() == 1 && performed[0] == "slot1", "a message from the network does the action");
+    out.run (e, 2);
+    osc.sendChanges();
+    for (int i = 0; i < 100 && listen.value ("/stinger/now/name").isEmpty(); ++i)
+        juce::Thread::sleep (5);
+    check (listen.value ("/stinger/now/name") == "Walk-in" && listen.value ("/stinger/now/playing") == "1", "sends what's playing");
+    check (listen.value ("/stinger/slot/1/name") == "Walk-in" && listen.value ("/stinger/slot/1/playing") == "1", "and the shown bank's buttons");
+    check (listen.value ("/stinger/now/time") == "0:02", "with the time left");
+
+    receiver.removeListener (&listen);
+    receiver.disconnect();
+    e.stopAll (false);
+    out.run (e, 2);
+}
+
+static void testBackupLink()
+{
+    std::puts ("Backup laptop");
+    constexpr int port = 52903;
+    const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("StingerBackupTest");
+    root.deleteRecursively();
+    const auto mainFolder = root.getChildFile ("Main"), copies = root.getChildFile ("Copies");
+    mainFolder.createDirectory();
+    const auto wav = mainFolder.getChildFile ("Walk in.wav");
+    {
+        juce::AudioBuffer<float> buffer (1, 960000);
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+            buffer.setSample (0, i, 0.25f);
+        juce::WavAudioFormat format;
+        std::unique_ptr<juce::AudioFormatWriter> writer (format.createWriterFor (new juce::FileOutputStream (wav), 48000.0, 1, 24, {}, 0));
+        writer->writeFromAudioSampleBuffer (buffer, 0, buffer.getNumSamples());
+    }
+    auto mainEngine = std::make_unique<PlaybackEngine>();
+    auto backupEngine = std::make_unique<PlaybackEngine>();
+    mainEngine->prepareForTest (rate, 2);
+    backupEngine->prepareForTest (rate, 2);
+    auto mainOut = std::make_unique<Outputs> (2);
+    auto backupOut = std::make_unique<Outputs> (2);
+    ShowController main (*mainEngine), backup (*backupEngine);
+    BackupLink mainLink (main), backupLink (backup);
+
+    auto pump = [&] (int ms)
+    {
+        const auto end = juce::Time::getMillisecondCounter() + (juce::uint32) ms;
+        while (juce::Time::getMillisecondCounter() < end)
+        {
+            mainOut->run (*mainEngine);
+            backupOut->run (*backupEngine);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (10);
+        }
+    };
+    auto until = [&] (std::function<bool()> done, int ms)
+    {
+        for (int waited = 0; waited < ms && ! done(); waited += 20)
+            pump (20);
+        return done();
+    };
+
+    main.getShow().cue (0) = monoOut (0);
+    main.getShow().cue (0).file = wav;
+    main.getShow().cue (0).name = "Walk in";
+    main.getShow().cue (0).trimIn = 0.5;
+    juce::String error;
+    check (main.loadNow (0, error), "main loads its song");
+
+    // the wrong code gets nowhere
+    check (mainLink.startMain ("RIGHT", port), "the main laptop listens");
+    backupLink.startBackup ("127.0.0.1", "WRONG", BackupLink::Mode::warm, copies, port);
+    pump (700);
+    check (! mainLink.isConnected() && ! backupLink.isSynced() && ! copies.getChildFile ("960000").exists(), "a wrong code is turned away");
+
+    backupLink.startBackup ("127.0.0.1", "RIGHT", BackupLink::Mode::warm, copies, port);
+    check (until ([&] { return mainLink.isConnected(); }, 4000), "the right code connects");
+    check (until ([&] { return backupLink.isSynced(); }, 8000), "the show arrives");
+    const auto& copy = backup.getShow().cue (0);
+    check (copy.name == "Walk in" && near ((float) copy.trimIn, 0.5f), "with the button's settings");
+    check (copy.file != wav && copy.file.isAChildOf (copies) && copy.file.getSize() == wav.getSize(), "and the audio copied into the backup's folder");
+    check (until ([&] { return backup.getAudio (0) != nullptr; }, 3000), "the copy loads");
+
+    // following
+    main.play (0);
+    check (until ([&] { return backupEngine->isCuePlaying (0); }, 1000), "a song started on the main laptop plays on the backup");
+    pump (400);
+    backupOut->run (*backupEngine);
+    check (std::abs (backupOut->at (0)) < 1.0e-6f, "warm standby: not a sound");
+    auto drift = [&]
+    {
+        auto a = mainEngine->getVoices(), b = backupEngine->getVoices();
+        return a.empty() || b.empty() ? 1.0 : std::abs (a[0].position - b[0].position);
+    };
+    std::printf ("  the two laptops are %.0f ms apart\n", drift() * 1000.0);
+    check (drift() < 0.1, "in step with the main laptop");
+
+    const auto voice = mainEngine->getVoices()[0];
+    mainEngine->seekVoice (voice.voice, (juce::int64) (5.0 * rate));
+    pump (300);
+    std::printf ("  after a jump on main: %.0f ms apart\n", drift() * 1000.0);
+    check (drift() < 0.1, "a jump on the main laptop is followed");
+
+    mainEngine->stopCue (0, false);
+    check (until ([&] { return ! backupEngine->isCuePlaying (0); }, 1500), "stopped on main: stopped here");
+
+    // changes come across while connected, and the file isn't sent twice
+    const auto stamp = copy.file.getLastModificationTime();
+    main.getShow().cue (0).name = "Renamed";
+    main.getShow().cue (0).levelDb = -3.0f;
+    main.setSelfDestruct (true);
+    main.addRunRow ({ 0, "7:00", "Host", {} });
+    main.addRunRow ({ 0, "7:05", "Guest", {} });
+    main.setRunNext (1);
+    check (until ([&] { return backup.getShow().cue (0).name == "Renamed"; }, 3000), "an edit on main reaches the backup");
+    check (until ([&] { return backup.getRunNext() == 1; }, 3000), "and the run of show's position");
+    check (backup.getShow().selfDestruct && near (backup.getShow().cue (0).levelDb, -3.0f), "settings too");
+    check (copy.file.getLastModificationTime() == stamp, "the audio isn't copied again");
+
+    // the schedule never runs by itself on a backup
+    ScheduleItem item;
+    item.cueId = 0;
+    item.kind = ScheduleItem::delay;
+    item.delaySeconds = 0.1;
+    main.addScheduleItem (item);
+    main.startSchedule();
+    check (until ([&] { return backup.getShow().schedule.size() == 1; }, 3000), "the schedule comes across");
+    check (until ([&] { return mainEngine->isCuePlaying (0); }, 1000), "main fires it");
+    check (until ([&] { return backupEngine->isCuePlaying (0); }, 1000), "the backup plays it because main does");
+
+    // take over
+    backupLink.takeOver();
+    check (! backupLink.isFollowing() && ! backup.isMirroring(), "Take over: on its own now");
+    pump (100);
+    backupOut->run (*backupEngine);
+    check (backupEngine->isCuePlaying (0) && backupOut->at (0) > 0.05f, "the song carries on, sound up");
+    backup.runGo();
+    pump (50);
+    check (backup.getRunNext() < 0 && backup.getRunOnAir() == 1, "the show runs from here, from the right place");
+    mainEngine->stopAll (false);
+    pump (300);
+    check (backupEngine->isCuePlaying (0), "the main laptop no longer stops it");
+    backupEngine->stopAll (false);
+    backupOut->run (*backupEngine, 2);
+
+    // the main laptop dies during a show
+    main.getShow().schedule.clear();
+    main.stopSchedule();
+    backupLink.startBackup ("127.0.0.1", "RIGHT", BackupLink::Mode::hot, copies, port);
+    check (until ([&] { return mainLink.isConnected() && backupLink.isSynced(); }, 6000), "reconnects in hot standby");
+    main.play (0);
+    check (until ([&] { return backupEngine->isCuePlaying (0); }, 1500), "following");
+    pump (300);
+    backupOut->run (*backupEngine);
+    check (backupOut->at (0) > 0.05f, "hot standby: sounding along with main");
+    mainLink.stop();
+    check (until ([&] { return backupLink.isMainLost(); }, 3500), "the lost main laptop is noticed");
+    check (backupEngine->isCuePlaying (0), "and the song plays on here");
+    backupLink.stop();
+    backupEngine->stopAll (false);
+    backupOut->run (*backupEngine, 2);
+    mainEngine->stopAll (false);
+    mainOut->run (*mainEngine, 2);
+    root.deleteRecursively();
+}
+
+static void testAutosave()
+{
+    std::puts ("Autosave and crash recovery");
+    const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("StingerAutosaveTest");
+    folder.deleteRecursively();
+    PlaybackEngine e;
+    e.prepareForTest (rate, 2);
+    Outputs out (2);
+    const auto recovery = Autosave::fileIn (folder);
+    auto settle = [] (Autosave& a) { for (int i = 0; i < 6000 && ! a.isIdle(); ++i) juce::Thread::sleep (5); };   // its thread is low priority by design
+    {
+        Autosave autosave (folder);
+        auto engine = std::make_unique<PlaybackEngine>();
+        engine->prepareForTest (rate, 2);
+        ShowController fresh (*engine);
+        fresh.setAutosave (&autosave);
+        fresh.setAutosaveIntervalForTest (0);
+        fresh.updateAutosave();
+        settle (autosave);
+        check (! recovery.existsAsFile(), "a new, untouched show leaves nothing to recover");
+        fresh.setAutosave (nullptr);
+    }
+    {
+        Autosave autosave (folder);
+        ShowController sc (e);
+        sc.setAutosave (&autosave);
+        sc.setAutosaveIntervalForTest (1000000);
+        auto& show = sc.getShow();
+        for (int i = 0; i < 2; ++i)
+        {
+            show.cue (i) = monoOut (0);
+            show.cue (i).file = juce::File::getCurrentWorkingDirectory().getChildFile ("song" + juce::String (i) + ".wav");
+            show.cue (i).name = "Song " + juce::String (i);
+            sc.setAudioForTest (i, constant (1, 0.1, 0.2f));
+            sc.addToPlaylist (0, i);
+        }
+        sc.setNextEntry (0, 1);
+        sc.setSelfDestruct (true);
+        sc.updateAutosave();   // the first change is copied straight away
+        settle (autosave);
+        check (recovery.existsAsFile(), "the first change makes a copy at once");
+        const int first = autosave.getWriteCount();
+        show.cue (1).name = "Renamed";
+        sc.updateAutosave();
+        settle (autosave);
+        check (autosave.getWriteCount() == first, "no new copy before the autosave time");
+
+        sc.play (0);
+        for (int b = 0; b < 30; ++b) { out.run (e); sc.updateSelfDestruct(); sc.updateAutosave(); }
+        settle (autosave);
+        check (show.cue (0).spent && autosave.getWriteCount() > first, "a button going black is written at once");
+        const int writes = autosave.getWriteCount();
+        sc.setAutosaveIntervalForTest (0);
+        sc.updateAutosave();
+        settle (autosave);
+        check (autosave.getWriteCount() == writes, "an unchanged show isn't written again");
+
+        // a big show: the part on the message thread has to stay tiny
+        for (int i = 0; i < Show::cuesPerBank * 4; ++i)
+            if (i >= 2)
+                show.cue (i).name = "A long enough song name " + juce::String (i);
+        sc.setSelfDestruct (true);
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        for (int i = 0; i < 20; ++i)
+        {
+            show.cue (5).name = "Name " + juce::String (i);
+            sc.updateAutosave();
+        }
+        const auto each = (juce::Time::getMillisecondCounterHiRes() - t0) / 20.0;
+        std::printf ("  (%.2f ms on the calling thread per autosave)\n", each);
+        check (each < 5.0, "an autosave costs the calling thread almost nothing");
+        settle (autosave);
+        sc.setAutosave (nullptr);   // "crash": the controller goes without saving or discarding
+    }
+    const auto found = Autosave::find (folder);
+    check (found.has_value() && found->showFile == juce::File(), "a crash leaves a copy; a never saved show comes back unnamed");
+    {
+        Autosave autosave (folder);
+        ShowController sc (e);
+        sc.setAutosave (&autosave);
+        juce::String error;
+        check (found.has_value() && sc.openRecovery (found->file, error), "the copy opens");
+        check (sc.getShow().cue (0).spent && ! sc.getShow().cue (1).spent, "black Self Destruct buttons come back");
+        check (sc.getShow().selfDestruct, "Self Destruct mode comes back");
+        check (sc.getNextEntry (0) == 1, "the playlist's Next comes back");
+        check (sc.hasUnsavedChanges(), "the recovered show counts as unsaved");
+        const auto saved = folder.getChildFile ("real").getChildFile ("real.stinger");
+        sc.updateAutosave();
+        settle (autosave);
+        check (recovery.existsAsFile(), "recovering writes the copy again (a second crash loses nothing)");
+        check (sc.saveShow (saved, error), "saves");
+        settle (autosave);
+        check (! recovery.existsAsFile() && saved.existsAsFile(), "saving removes the recovery copy");
+        sc.getShow().cue (1).spent = true;
+        sc.setSelfDestruct (false);
+        sc.setAutosaveIntervalForTest (0);
+        sc.updateAutosave();
+        settle (autosave);
+        const auto again = Autosave::find (folder);
+        check (again.has_value() && again->showFile == saved, "a saved show's copy remembers its name");
+        check (Show().load (saved, error) && ! [&] { Show s; s.load (saved, error); return s.cue (1).spent; }(),
+               "autosaving never touches the show file itself");
+        sc.setAutosave (nullptr);
+    }
+    {
+        // a saved, unchanged show still has something to lose once it's running
+        const auto saved = folder.getChildFile ("clean").getChildFile ("clean.stinger");
+        Autosave autosave (folder);
+        auto engine = std::make_unique<PlaybackEngine>();
+        engine->prepareForTest (rate, 2);
+        ShowController sc (*engine);
+        sc.setAutosave (&autosave);
+        sc.addRunRow ({ -1, {}, "First", {} });
+        sc.addRunRow ({ -1, {}, "Second", {} });
+        juce::String error;
+        check (sc.saveShow (saved, error), "a clean show");
+        settle (autosave);
+        sc.updateAutosave();
+        settle (autosave);
+        check (! recovery.existsAsFile(), "nothing to recover from a clean, untouched show");
+        sc.runGo();
+        sc.updateAutosave();
+        settle (autosave);
+        check (recovery.existsAsFile(), "moving down the run of show is written at once");
+        sc.setAutosave (nullptr);
+        settle (autosave);
+    }
+    Autosave::setAside (folder);
+    check (! recovery.existsAsFile() && ! Autosave::find (folder).has_value(), "Don't recover: not asked again");
+    folder.deleteRecursively();
 }
 
 static void testShowFolders()
@@ -1602,8 +2417,97 @@ static int remoteServe (const juce::String& pageFile, int seconds)
     return 0;
 }
 
+/** EngineTests --failover: real devices. A silent song plays while the device is closed underneath it, or replaced behind
+    Stinger's back as JUCE does when a device vanishes; the watcher has to move to the backup with the song in step. */
+static int testFailover()
+{
+    PlaybackEngine e;
+    e.initialise (nullptr);
+    auto& manager = e.getDeviceManager();
+    auto* device = manager.getCurrentAudioDevice();
+    if (device == nullptr) { std::puts ("no audio device"); return 1; }
+    std::printf ("main: %s / %s at %.0f\n", device->getTypeName().toRawUTF8(), device->getName().toRawUTF8(), device->getCurrentSampleRate());
+
+    DeviceWatch::Backup backup;
+    for (auto* t : manager.getAvailableDeviceTypes())
+        if (t->getTypeName() == device->getTypeName())
+            for (auto& name : t->getDeviceNames (false))
+                if (name != device->getName() && ! name.containsIgnoreCase ("Dante") && ! name.containsIgnoreCase ("SoundGrid"))
+                {
+                    backup.type = t->getTypeName();
+                    backup.name = name;
+                }
+    if (! backup.isSet()) { std::puts ("no second output on this device type"); return 1; }
+    std::printf ("backup: %s / %s\n", backup.type.toRawUTF8(), backup.name.toRawUTF8());
+
+    ShowController sc (e);
+    DeviceWatch watch (sc);
+    watch.setBackup (backup);
+    const double sr = e.getSampleRate();
+    sc.getShow().cue (0) = monoOut (0);
+    sc.setAudioForTest (0, std::make_shared<CueAudio>());
+    auto silent = std::make_shared<CueAudio>();
+    silent->sampleRate = silent->fileSampleRate = sr;
+    silent->fileChannels = 1;
+    silent->samples.setSize (1, (int) (60.0 * sr));
+    silent->samples.clear();
+    sc.setAudioForTest (0, silent);
+
+    auto pump = [] (int ms) { juce::MessageManager::getInstance()->runDispatchLoopUntil (ms); };
+    auto position = [&e] { auto v = e.getVoices(); return v.empty() ? -1.0 : v[0].position; };
+    sc.play (0);
+    pump (800);
+    const auto t0 = juce::Time::getMillisecondCounterHiRes();
+    const auto p0 = position();
+    check (p0 > 0.3, "the song is running on the main device");
+
+    watch.simulateLossForTest();
+    for (int i = 0; i < 100 && watch.getState() != DeviceWatch::State::onBackup; ++i)
+        pump (50);
+    const auto moved = juce::Time::getMillisecondCounterHiRes();
+    std::printf ("  moved after %.0f ms\n", moved - t0);
+    check (watch.getState() == DeviceWatch::State::onBackup, "device closed: moved to the backup by itself");
+    check (manager.getCurrentAudioDevice() != nullptr && manager.getCurrentAudioDevice()->getName() == backup.name, "the backup is the open device");
+    pump (600);
+    auto drift = [&] { return position() - p0 - (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0; };
+    std::printf ("  song is %.0f ms from where it would have been\n", drift() * 1000.0);
+    check (std::abs (drift()) < 0.25, "the song carried on where it would have been");
+
+    juce::String error;
+    check (watch.isMainAvailable(), "the main device is still listed");
+    check (watch.returnToMain (error), "back to the main device");
+    pump (600);
+    std::printf ("  song is %.0f ms from where it would have been\n", drift() * 1000.0);
+    check (std::abs (drift()) < 0.25, "still in step after going back");
+
+    // JUCE reopens another device by itself when one vanishes: that counts as lost too
+    auto setup = manager.getAudioDeviceSetup();
+    setup.outputDeviceName = backup.name;
+    manager.setAudioDeviceSetup (setup, true);
+    for (int i = 0; i < 40 && watch.getState() == DeviceWatch::State::normal; ++i)
+        pump (50);
+    check (watch.getState() == DeviceWatch::State::onBackup, "another device taking over unasked counts as a loss");
+    check (watch.returnToMain (error), "back again");
+
+    watch.setUserChanging (true);
+    setup = manager.getAudioDeviceSetup();
+    setup.outputDeviceName = backup.name;
+    manager.setAudioDeviceSetup (setup, true);
+    pump (500);
+    watch.setUserChanging (false);
+    pump (500);
+    check (watch.getState() == DeviceWatch::State::normal, "a device picked in the Audio window is simply the new one");
+
+    e.stopAll (false);
+    pump (200);
+    e.shutdownAudio();
+    std::printf (failures == 0 ? "FAILOVER OK\n" : "FAILOVER FAILED\n");
+    return failures;
+}
+
 int main (int argc, char** argv)
 {
+    std::setvbuf (stdout, nullptr, _IONBF, 0);   // a crash still shows how far it got
     juce::ScopedJuceInitialiser_GUI juce;
     if (argc == 3 && juce::String (argv[1]) == "--plugin")
         return testRealPlugin (juce::String (argv[2]));
@@ -1620,6 +2524,13 @@ int main (int argc, char** argv)
     }
     if (argc == 3 && juce::String (argv[1]) == "--download")
         return testDownload (juce::String (argv[2]));
+    if (argc == 2 && juce::String (argv[1]) == "--device-loss")
+    {
+        testDeviceLoss();
+        return failures;
+    }
+    if (argc == 2 && juce::String (argv[1]) == "--failover")
+        return testFailover();
     if (argc == 2 && juce::String (argv[1]) == "--arm")
         return testArming();
     if (argc == 4 && juce::String (argv[1]) == "--remote-serve")
@@ -1637,6 +2548,14 @@ int main (int argc, char** argv)
     testLoopPoints();
     testMovingButtons();
     testShowFolders();
+    testAutosave();
+    testShowCheck();
+    testDeviceLoss();
+    testLoudness();
+    testRunOfShow();
+    testSchedule();
+    testOsc();
+    testBackupLink();
     testSelfDestruct();
     testPlaylists();
     testControls();

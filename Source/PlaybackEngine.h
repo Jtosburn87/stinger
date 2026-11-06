@@ -123,6 +123,19 @@ public:
     /** A button's plugins changed while it plays: its voices (and songs queued to follow as it) go
         through these from now on (null = straight to the output). */
     void setCueFx (int cueId, CueFx* fx);
+    /** The device was gone for this many samples: every voice jumps to where it would have been by now (loops wrap;
+        songs with a next song linked go no further than the link; songs that would have ended are done). */
+    void advanceVoices (juce::int64 samples);
+    /** Playing on the backup device: forcedOutput >= 0 sends every song to that pair; otherwise songs keep their
+        outputs, and any the backup device does not have go to outputs 1-2 rather than going silent. */
+    void setBackupRouting (bool active, int forcedOutput);
+    /** Silences the outputs, with a short fade, while everything keeps running (a backup laptop on warm standby). */
+    void setMuted (bool muted) { mutedTarget.store (muted); }
+    /** The next device to start carries on from where the music would be by then: the time since the last device's
+        last callback is skipped, measured in the first callback of the new one. */
+    void resyncOnNextStart (bool armed) { resyncArmed.store (armed); }
+    /** When the audio device last called back (Time::getMillisecondCounter). */
+    juce::uint32 getLastCallbackMs() const { return lastCallbackMs.load(); }
 
     struct VoiceInfo
     {
@@ -158,7 +171,7 @@ private:
     struct Command
     {
         enum Type { play, stopCue, stopVoice, stopAll, live, follow, cancelFollow, fadeTag, releaseLoop,
-                    seek, setLoop, swapCues, setFx } type = play;
+                    seek, setLoop, swapCues, setFx, advance } type = play;
         bool fade = false;
         int id = -1;
         float gain = 1.0f, pan = 0.0f;
@@ -214,6 +227,8 @@ private:
     void beginStop (Voice& v, bool fade);
     void stopOver (Voice& v, juce::int64 length, FadeCurve curve);
     void render (Voice& v, float* const* outputs, int numOutputChannels, int numSamples);
+    OutputRoute routeFor (const OutputRoute& route) const;
+    void advance (Voice& v, juce::int64 samples);
     void publishStatus();
     void enableAllChannels();
     void handleInputs (const float* const* inputs, int numInputChannels, int numSamples);
@@ -223,6 +238,12 @@ private:
     std::atomic<double> sampleRate { 48000.0 };
     std::atomic<int> numOutputs { 0 };
     std::atomic<int> blockSize { 512 };
+    std::atomic<bool> backupActive { false };
+    std::atomic<int> backupOutput { -1 };
+    std::atomic<juce::uint32> lastCallbackMs { 0 };
+    std::atomic<bool> resyncArmed { false }, freshStart { false };
+    std::atomic<bool> mutedTarget { false };
+    float muteGain = 1.0f;
     std::array<int, maxOutputs> bufferIndex {};   // device output -> index in the callback's buffers (-1 = off)
     std::array<int, maxInputs> inputIndex {};     // device input -> index in the callback's input buffers
     std::atomic<int> numInputs { 0 };

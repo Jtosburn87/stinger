@@ -94,4 +94,9 @@ private:
     FadeRow fadeIn, fadeOut, stopFade;
     juce::ToggleButton fadeOthers { "Fade others when played" }, loop { "Loop" };
     juce::TextButton learn { "Learn" }, clearKey { "Clear" }, colourButton { "Colour" };
+    juce::TextButton loudnessButton { "LUFS" };
+    void showLoudnessMenu();
+public:
+    /** Opens the targets dialog (set by the main window). */
+    std::function<void()> onLoudnessTargets;
 };

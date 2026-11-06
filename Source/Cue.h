@@ -64,6 +64,10 @@ struct Cue
     Fade stopFade { 1.0, FadeCurve::sCurve };  // used by "Fade out" while playing
     float levelDb = 0.0f;                   // -20 .. +20
     float pan = 0.0f;                       // -1 (left) .. +1 (right)
+    bool voiceOver = false;                 // loudness target: voice-over rather than music
+    double lufs = 0.0;                      // measured loudness of what plays, < 0; 0 = not measured
+    double peakDb = -120.0;                 // its highest sample
+    juce::String lufsKey;                   // what was measured (Loudness: stays valid while this matches)
     OutputRoute output;
     bool fadeOthers = false;                // starting this fades out everything else
     bool loop = false;                      // plays until stopped (pressed again, another button on its output, Stop all)

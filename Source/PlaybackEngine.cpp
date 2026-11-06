@@ -545,6 +545,7 @@ float PlaybackEngine::takeOutputPeak (int channel)
 
 void PlaybackEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 {
+    freshStart.store (true);
     sampleRate.store (device->getCurrentSampleRate());
     const auto active = device->getActiveOutputChannels();
     const int count = std::min (maxOutputs, device->getOutputChannelNames().size());
@@ -663,6 +664,11 @@ void PlaybackEngine::handleCommands()
                                     v.plan.loopRestart = v.plan.loopStart;   // past Loop Out: the Out point goes to Loop In
                             }
                         }
+                    break;
+                case Command::advance:
+                    for (auto& v : voices)
+                        if (v.active)
+                            advance (v, c.overlap);
                     break;
                 case Command::swapCues:
                     for (auto& v : voices)
@@ -873,12 +879,13 @@ void PlaybackEngine::render (Voice& v, float* const* outputs, int numOutputChann
         const int index = bufferIndex[(size_t) deviceChannel];
         return index >= 0 && index < numOutputChannels ? outputs[index] : nullptr;
     };
+    const auto route = routeFor (p.output);
     float* out0 = nullptr;
     float* out1 = nullptr;
     if (p.fx != nullptr)
     {
         // through the button's plugins: into its stereo bus (routed to the output after the plugins)
-        if (auto* bus = busFor (p.fx, p.output, numSamples))
+        if (auto* bus = busFor (p.fx, route, numSamples))
         {
             out0 = bus->buffer.getWritePointer (0);
             out1 = bus->buffer.getWritePointer (1);
@@ -886,11 +893,11 @@ void PlaybackEngine::render (Voice& v, float* const* outputs, int numOutputChann
     }
     else
     {
-        out0 = destination (p.output.firstChannel);
-        out1 = p.output.stereo ? destination (p.output.firstChannel + 1) : nullptr;
+        out0 = destination (route.firstChannel);
+        out1 = route.stereo ? destination (route.firstChannel + 1) : nullptr;
     }
 
-    const bool busMono = p.fx != nullptr && ! p.output.stereo && out0 != nullptr && out1 != nullptr;
+    const bool busMono = p.fx != nullptr && ! route.stereo && out0 != nullptr && out1 != nullptr;
 
     // Pan for this block. Mono source on a pair: constant power. Stereo source: balance.
     const float panNow = v.pan.getNextValue();
@@ -1194,12 +1201,22 @@ void PlaybackEngine::audioDeviceIOCallbackWithContext (const float* const* input
                                                        int numOutputChannels, int numSamples,
                                                        const juce::AudioIODeviceCallbackContext&)
 {
+    const auto now = juce::Time::getMillisecondCounter();
+    const auto previousCallback = lastCallbackMs.exchange (now);
     for (int ch = 0; ch < numOutputChannels; ++ch)
         if (outputs[ch] != nullptr)
             juce::FloatVectorOperations::clear (outputs[ch], numSamples);
 
     handleInputs (inputs, numInputChannels, numSamples);
     handleCommands();
+
+    if (freshStart.exchange (false) && resyncArmed.exchange (false))
+    {
+        const auto gap = (juce::int64) ((double) (now - previousCallback) / 1000.0 * sampleRate.load());
+        for (auto& v : voices)
+            if (v.active)
+                advance (v, gap);
+    }
 
     for (auto& b : buses)
         if (b.active)
@@ -1242,4 +1259,83 @@ void PlaybackEngine::audioDeviceIOCallbackWithContext (const float* const* input
         if (peak > p.load())
             p.store (peak);
     }
+
+    const float muteGoal = mutedTarget.load() ? 0.0f : 1.0f;
+    if (muteGain != muteGoal || muteGoal == 0.0f)
+    {
+        const float step = (muteGoal - muteGain) / (float) std::max (1, numSamples);
+        const float from = muteGain;
+        for (int ch = 0; ch < numOutputChannels; ++ch)
+            if (auto* o = outputs[ch])
+                for (int i = 0; i < numSamples; ++i)
+                    o[i] *= from + step * (float) i;
+        muteGain = muteGoal;
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Device changes
+
+void PlaybackEngine::advanceVoices (juce::int64 samples)
+{
+    Command c;
+    c.type = Command::advance;
+    c.overlap = samples;
+    push (c);
+}
+
+void PlaybackEngine::setBackupRouting (bool active, int forcedOutput)
+{
+    backupOutput.store (forcedOutput);
+    backupActive.store (active);
+}
+
+OutputRoute PlaybackEngine::routeFor (const OutputRoute& route) const
+{
+    if (! backupActive.load())
+        return route;
+    if (const int forced = backupOutput.load(); forced >= 0)
+        return { forced, true };
+    if (route.firstChannel + route.numChannels() > numOutputs.load())
+        return { 0, numOutputs.load() > 1 };
+    return route;
+}
+
+void PlaybackEngine::advance (Voice& v, juce::int64 samples)
+{
+    const auto& p = v.plan;
+    if (v.stopping)
+    {
+        if (v.stopLeft <= samples)
+        {
+            v.active = false;
+            return;
+        }
+        v.stopLeft -= samples;
+    }
+    auto target = v.pos + samples;
+    if (p.loop && p.loopEnd > 0 && v.pos < p.loopEnd)
+    {
+        if (target >= p.loopEnd)
+            target = p.loopStart + (target - p.loopStart) % std::max<juce::int64> (1, p.loopEnd - p.loopStart);
+    }
+    else if (p.loop)
+    {
+        const auto start = p.loopEnd > 0 ? p.loopRestart : 0;
+        if (target >= p.length)
+            target = start + (target - start) % std::max<juce::int64> (1, p.length - start);
+    }
+    else if (v.hasFollow && ! v.stopping)
+        target = std::min (target, v.followAt);   // the link starts the next song a little late rather than never
+    else if (target >= p.length)
+    {
+        v.active = false;
+        return;
+    }
+    v.pos = target;
+    v.segment = 0;
+    v.firstPass = v.firstPass && target < p.fadeInLength;
+    v.startRamp = 0;   // comes back in without a click
+    v.seekTo = -1;
+    v.seekLeft = 0;
 }

@@ -41,6 +41,13 @@ add_library(StingerCore STATIC
     Source/CueAudio.cpp
     Source/PlaybackEngine.cpp
     Source/Show.cpp
+    Source/Autosave.cpp
+    Source/ShowCheck.cpp
+    Source/DeviceWatch.cpp
+    Source/Loudness.cpp
+    Source/Schedule.cpp
+    Source/OscBridge.cpp
+    Source/BackupLink.cpp
     Source/Playlists.cpp
     Source/Controls.cpp
     Source/CueFx.cpp
@@ -69,6 +76,7 @@ target_compile_definitions(StingerCore PUBLIC
 target_link_libraries(StingerCore
     PRIVATE
         juce::juce_audio_utils
+        juce::juce_osc
         juce::juce_gui_extra
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags)
@@ -102,6 +110,13 @@ target_sources(Stinger PRIVATE
     Source/Look.cpp
     Source/ImportPanel.cpp
     Source/Remote.cpp
+    Source/ShowCheckPanel.cpp
+    Source/AudioPanel.cpp
+    Source/CountdownDisplay.cpp
+    Source/SchedulePanel.cpp
+    Source/RunOfShowPanel.cpp
+    Source/OscPanel.cpp
+    Source/BackupPanel.cpp
     third_party/qrcodegen/qrcodegen.cpp)
 
 # The Wi-Fi remote's web page, served by Stinger itself.

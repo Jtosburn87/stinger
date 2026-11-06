@@ -244,6 +244,7 @@ bool ShowController::isLoopingUntilGo (int playlist) const
 
 void ShowController::go (int playlist)
 {
+    goPressed();
     if (isLoopingUntilGo (playlist))
     {
         // the loop finishes its pass, then its link starts the next song with no gap
@@ -260,6 +261,7 @@ void ShowController::go (int playlist)
 
 void ShowController::fadeToNext (int playlist)
 {
+    goPressed();
     const int index = getNextEntry (playlist);
     if (index < 0)
         return;

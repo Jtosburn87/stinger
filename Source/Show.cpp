@@ -1,4 +1,6 @@
 #include "Show.h"
+#include "Autosave.h"
+#include "Loudness.h"
 #include <optional>
 
 juce::String PlaylistEntry::transitionName() const
@@ -25,6 +27,8 @@ void Show::reset()
     }
     playlists.clear();
     playlists.push_back ({ "Playlist 1", {} });
+    run.clear();
+    schedule.clear();
     playbackMode = PlaybackMode::oneAtATime;
     selfDestruct = false;
 }
@@ -67,6 +71,13 @@ juce::var Show::toVar() const
         playlistList.add (list);
     }
     root->setProperty ("playlists", playlistList);
+    juce::Array<juce::var> runList, scheduleList;
+    for (auto& r : run)
+        runList.add (r.toVar());
+    for (auto& s : schedule)
+        scheduleList.add (s.toVar());
+    root->setProperty ("run", runList);
+    root->setProperty ("schedule", scheduleList);
     return root;
 }
 
@@ -108,6 +119,14 @@ bool Show::fromVar (const juce::var& v)
                 }
             playlists.push_back (p);
         }
+    run.clear();
+    if (auto* list = v.getProperty ("run", {}).getArray())
+        for (auto& r : *list)
+            run.push_back (RunRow::fromVar (r));
+    schedule.clear();
+    if (auto* list = v.getProperty ("schedule", {}).getArray())
+        for (auto& s : *list)
+            schedule.push_back (ScheduleItem::fromVar (s));
     if (banks.empty())
         reset();
     if (playlists.empty())
@@ -177,12 +196,16 @@ ShowController::ShowController (PlaybackEngine& e) : engine (e)
 {
     loadedRate = engine.getSampleRate();
     assignUids();
+    assignRunUids();
+    markPositionSaved();
     startTimerHz (10);
 }
 
 ShowController::~ShowController()
 {
     stopTimer();
+    loudnessAlive->store (false);
+    loudnessPool.removeAllJobs (true, 10000);
 }
 
 juce::File ShowController::showFileFor (const juce::String& name) const
@@ -349,6 +372,10 @@ void ShowController::swapCues (int a, int b)
     for (auto& p : show.playlists)
         for (auto& e : p.entries)
             e.cueId = e.cueId == a ? b : e.cueId == b ? a : e.cueId;
+    for (auto& r : show.run)
+        r.cueId = r.cueId == a ? b : r.cueId == b ? a : r.cueId;
+    for (auto& s : show.schedule)
+        s.cueId = s.cueId == a ? b : s.cueId == b ? a : s.cueId;
     engine.swapCues (a, b);
     requeueFollows();
     dirty = true;
@@ -429,6 +456,8 @@ int ShowController::assignFiles (juce::Array<juce::File> files, int startId)
 
 void ShowController::trigger (int id)
 {
+    if (const int i = getNextScheduled(); i >= 0 && show.schedule[(size_t) i].held && show.schedule[(size_t) i].cueId == id)
+        show.schedule[(size_t) i].state = ScheduleItem::defeated;   // its button started by hand during a hold
     if (engine.isCuePlaying (id))
         engine.stopCue (id, true);
     else
@@ -525,7 +554,6 @@ bool ShowController::loadNow (int id, juce::String& error)
 void ShowController::reloadAll()
 {
     loadedRate = engine.getSampleRate();
-    assignUids();
     for (int b = 0; b < (int) show.banks.size(); ++b)
         for (int s = 0; s < Show::cuesPerBank; ++s)
             if (! show.cue (Show::cueId (b, s)).isEmpty())
@@ -566,6 +594,7 @@ void ShowController::updateSelfDestruct()
         if (show.isValid (*it) && ! show.cue (*it).isEmpty() && ! show.cue (*it).spent)
         {
             show.cue (*it).spent = true;   // played and stopped (or ended): black from now on
+            autosaveNow = true;
             changed = true;
         }
         it = destructing.erase (it);
@@ -624,18 +653,78 @@ void ShowController::timerCallback()
         for (auto& [id, chain] : fx)
             chain->prepare (fxRate, fxBlock);   // new device rate / buffer size
     }
-    updatePlaylist();
-    updateSelfDestruct();
+
+    if (std::abs (engine.getSampleRate() - loadedRate) > 0.5)
+    {
+        // what's playing right now. (The engine reports seconds by the new rate, but its voices are still in samples
+        // of the old one.) Older than this tick's snapshot would miss a song started in the last moment.
+        resumeVoices.clear();
+        const double scale = engine.getSampleRate() / std::max (1.0, loadedRate);
+        for (auto& v : engine.getVoices())
+            if (! v.preview && ! v.stopping && ! v.waiting)
+                resumeVoices.push_back ({ v.cueId, v.tag, v.position * scale, v.looping });
+        lastVoicesMs = juce::Time::getMillisecondCounter();
+        resumePending = ! resumeVoices.empty();
+        engine.stopAll (false);
+        reloadAll();   // audio is kept at the device rate
+    }
+    if (resumePending)
+    {
+        if (loading.empty())
+            resumeKeptVoices();
+    }
+    else
+    {
+        updatePlaylist();
+        if (! mirroring)
+            updateSelfDestruct();
+        if (! mirroring)
+            updateSchedule();
+        if (! mirroring)
+            updateLoudness();
+    }
+    if (! mirroring)
+        updateAutosave();
 
     retired.erase (std::remove_if (retired.begin(), retired.end(),
                                    [this] (auto& a) { return ! engine.isUsing (a.get()); }),
                    retired.end());
+}
 
-    if (std::abs (engine.getSampleRate() - loadedRate) > 0.5)
+
+void ShowController::resumeKeptVoices()
+{
+    resumePending = false;
+    if (! resumeAfterRateChange || ! resumeAfterRateChange())
+        return;
+    const double elapsed = (juce::Time::getMillisecondCounter() - lastVoicesMs) / 1000.0;
+    const double sr = engine.getSampleRate();
+    for (auto it = resumeVoices.rbegin(); it != resumeVoices.rend(); ++it)
     {
-        engine.stopAll (false);
-        reloadAll();   // audio is kept at the device rate
+        const auto audio = getAudio (it->cueId);
+        if (audio == nullptr || ! show.isValid (it->cueId))
+            continue;
+        PlayPlan plan;
+        const auto& cue = show.cue (it->cueId);
+        if (! (it->looping ? PlayPlan::makeLoop (cue, *audio, it->cueId, plan) : PlayPlan::make (cue, *audio, it->cueId, plan)))
+            continue;
+        const double length = (double) plan.length / sr;
+        double position = it->position + elapsed;
+        if (position >= length)
+        {
+            if (! it->looping)
+                continue;
+            position = std::fmod (position, length);
+        }
+        plan.startAt = (juce::int64) (position * sr);
+        plan.tag = it->tag;
+        if (auto t = tagPlaylist.find (it->tag); t != tagPlaylist.end())
+            plan.playlist = t->second;
+        attachFx (plan);
+        chained.erase (it->tag);   // its link to the next song is queued again
+        engine.play (plan);
     }
+    resumeVoices.clear();
 }
 
 void ShowController::newShow()
@@ -656,12 +745,17 @@ void ShowController::newShow()
     showFile = juce::File();
     selectedPlaylist = 0;
     assignUids();
+    assignRunUids();
+    scheduleRunning = false;
     tagUid.clear();
     tagPlaylist.clear();
     chained.clear();
     seen.clear();
     destructing.clear();
     dirty = false;
+    markPositionSaved();
+    if (autosave != nullptr)
+        autosave->discard();
     sendChangeMessage();
 }
 
@@ -678,9 +772,11 @@ bool ShowController::openShow (const juce::File& f, juce::String& error)
             if (show.cue (Show::cueId (b, s)).hasPlugins())
                 createPlugins (Show::cueId (b, s));
     assignUids();
+    assignRunUids();
     showFile = f;
     reloadAll();
     dirty = false;
+    markPositionSaved();
     sendChangeMessage();
     return true;
 }
@@ -699,6 +795,336 @@ bool ShowController::saveShow (const juce::File& f, juce::String& error)
         return false;
     showFile = f;
     dirty = false;
+    markPositionSaved();
+    if (autosave != nullptr)
+        autosave->discard();
     sendChangeMessage();
     return true;
+}
+
+juce::var ShowController::recoveryVar() const
+{
+    auto v = show.toVar();
+    v.getDynamicObject()->setProperty ("recovery", positionVar());
+    return v;
+}
+
+
+bool ShowController::openRecovery (const juce::File& f, juce::String& error)
+{
+    juce::var v;
+    if (juce::JSON::parse (f.loadFileAsString(), v).failed())
+    {
+        error = "The recovery copy can't be read.";
+        return false;
+    }
+    const auto info = v.getProperty ("recovery", {});
+    const auto path = info.getProperty ("showFile", {}).toString();
+    if (! openShow (f, error))
+        return false;
+    showFile = path.isNotEmpty() ? juce::File (path) : juce::File();
+    applyPosition (info);
+    dirty = true;          // nothing of this is in the show file yet
+    autosaveNow = true;    // opening it dropped the old copy: write it again straight away
+    sendChangeMessage();
+    return true;
+}
+
+std::vector<ShowIssue> ShowController::checkShow() const
+{
+    std::vector<ShowIssue> issues;
+    auto add = [&issues] (ShowIssue::Kind kind, int id, juce::String text, juce::File file = juce::File())
+    {
+        issues.push_back ({ kind, id, std::move (text), std::move (file) });
+    };
+    auto label = [this] (int id)
+    {
+        const auto& c = show.cue (id);
+        return "Button " + juce::String::charToString ((juce::juce_wchar) ('A' + Show::bankOf (id))) + juce::String (Show::slotOf (id) + 1)
+             + (c.name.isNotEmpty() ? " \"" + c.name + "\"" : juce::String());
+    };
+
+    const int outputs = engine.getNumOutputs();
+    if (outputs <= 0)
+        add (ShowIssue::Kind::noDevice, -1, "No audio device is open.");
+
+    for (int b = 0; b < (int) show.banks.size(); ++b)
+        for (int s = 0; s < Show::cuesPerBank; ++s)
+        {
+            const int id = Show::cueId (b, s);
+            const auto& c = show.cue (id);
+            if (c.isEmpty())
+                continue;
+            if (! c.file.existsAsFile())
+                add (ShowIssue::Kind::missingAudio, id, label (id) + ": can't find " + c.file.getFullPathName(), c.file);
+            else if (const auto error = getError (id); error.isNotEmpty())
+                add (ShowIssue::Kind::unreadableAudio, id, label (id) + ": " + error, c.file);
+            if (outputs > 0 && c.output.firstChannel + c.output.numChannels() > outputs)
+                add (ShowIssue::Kind::noSuchOutput, id, label (id) + " plays on output " + juce::String (c.output.firstChannel + 1)
+                     + (c.output.stereo ? "-" + juce::String (c.output.firstChannel + 2) : juce::String())
+                     + ", but this device only has " + juce::String (outputs) + ".");
+            for (int p = 0; p < (int) c.plugins.size(); ++p)
+                if (const auto& slot = c.plugins[(size_t) p]; ! slot.isEmpty())
+                {
+                    const auto* chain = getFx (id);
+                    if (chain == nullptr || chain->getPlugin (p) == nullptr)
+                    {
+                        const auto xml = juce::parseXML (slot.description);
+                        add (ShowIssue::Kind::missingPlugin, id, label (id) + ": plugin "
+                             + (xml != nullptr ? xml->getStringAttribute ("name", "(unknown)") : juce::String ("(unknown)"))
+                             + " isn't loaded.");
+                    }
+                }
+        }
+
+    for (int p = 0; p < (int) show.playlists.size(); ++p)
+    {
+        const auto& list = show.playlists[(size_t) p];
+        for (int i = 0; i < (int) list.entries.size(); ++i)
+            if (const int id = list.entries[(size_t) i].cueId; ! show.isValid (id) || show.cue (id).isEmpty())
+                add (ShowIssue::Kind::emptyEntry, id, list.displayName (p) + ", song " + juce::String (i + 1) + ": its button is empty.");
+    }
+    for (int i = 0; i < (int) show.run.size(); ++i)
+        if (const int id = show.run[(size_t) i].cueId; id >= 0 && (! show.isValid (id) || show.cue (id).isEmpty()))
+            add (ShowIssue::Kind::emptyEntry, id, "Run of show, row " + juce::String (i + 1) + ": its button is empty.");
+    for (int i = 0; i < (int) show.schedule.size(); ++i)
+        if (const int id = show.schedule[(size_t) i].cueId; ! show.isValid (id) || show.cue (id).isEmpty())
+            add (ShowIssue::Kind::emptyEntry, id, "Schedule, trigger " + juce::String (i + 1) + ": its button is empty.");
+    return issues;
+}
+
+void ShowController::relinkFile (juce::File from, const juce::File& to)
+{
+    if (from == to)
+        return;
+    bool changed = false;
+    for (int b = 0; b < (int) show.banks.size(); ++b)
+        for (int s = 0; s < Show::cuesPerBank; ++s)
+        {
+            const int id = Show::cueId (b, s);
+            if (auto& c = show.cue (id); c.file == from)
+            {
+                c.file = to;
+                errors.erase (id);
+                loadAudio (id);
+                changed = true;
+            }
+        }
+    if (changed)
+    {
+        dirty = true;
+        sendChangeMessage();
+    }
+}
+
+std::optional<float> ShowController::suggestedLevel (int id) const
+{
+    if (! show.isValid (id) || show.cue (id).lufs >= 0.0)
+        return std::nullopt;
+    const auto& c = show.cue (id);
+    return (float) juce::jlimit ((double) Cue::minLevelDb, (double) Cue::maxLevelDb,
+                                 (c.voiceOver ? voiceTarget : musicTarget) - c.lufs);
+}
+
+void ShowController::applyLoudness (int id)
+{
+    if (const auto level = suggestedLevel (id))
+    {
+        show.cue (id).levelDb = *level;
+        cueChanged (id);
+    }
+}
+
+void ShowController::updateLoudness()
+{
+    if (measuring)
+        return;
+    for (auto& [id, audio] : media)
+    {
+        if (audio == nullptr || ! show.isValid (id))
+            continue;
+        auto& c = show.cue (id);
+        const auto parts = c.segments (audio->seconds());
+        const auto key = loudnessKey (parts);
+        if (key == c.lufsKey)
+            continue;
+        measuring = true;
+        loudnessPool.addJob ([this, audio = audio, parts, key, id = id, alive = loudnessAlive]
+        {
+            const auto result = measureLoudness (*audio, parts);
+            juce::MessageManager::callAsync ([this, result, key, id, alive]
+            {
+                if (! alive->load())
+                    return;
+                measuring = false;
+                if (show.isValid (id))
+                {
+                    auto& cue = show.cue (id);
+                    cue.lufs = result.isValid() ? result.lufs : 0.0;
+                    cue.peakDb = result.peakDb;
+                    cue.lufsKey = key;
+                    sendChangeMessage();
+                }
+            });
+        });
+        return;
+    }
+}
+
+juce::var ShowController::positionVar() const
+{
+    auto* info = new juce::DynamicObject();
+    info->setProperty ("showFile", showFile == juce::File() ? juce::String() : showFile.getFullPathName());
+    info->setProperty ("selectedPlaylist", selectedPlaylist);
+    juce::Array<juce::var> next;
+    for (int p = 0; p < (int) show.playlists.size(); ++p)
+        next.add (getNextEntry (p));
+    info->setProperty ("next", next);
+    info->setProperty ("runNext", getRunNext());
+    info->setProperty ("runOnAir", getRunOnAir());
+    info->setProperty ("scheduleRunning", scheduleRunning);
+    juce::Array<juce::var> items;
+    for (auto& s : show.schedule)
+    {
+        auto* o = new juce::DynamicObject();
+        o->setProperty ("state", (int) s.state);
+        o->setProperty ("fireAt", s.fireAt);
+        o->setProperty ("held", s.held);
+        o->setProperty ("heldSeconds", s.heldSeconds);
+        items.add (o);
+    }
+    info->setProperty ("scheduleItems", items);
+    return info;
+}
+
+void ShowController::applyPosition (const juce::var& info)
+{
+    selectedPlaylist = juce::jlimit (0, std::max (0, (int) show.playlists.size() - 1), (int) info.getProperty ("selectedPlaylist", 0));
+    if (auto* next = info.getProperty ("next", {}).getArray())
+        for (int p = 0; p < std::min (next->size(), (int) show.playlists.size()); ++p)
+            if ((int) (*next)[p] >= 0)
+                setNextEntry (p, (int) (*next)[p]);
+    if (const int r = (int) info.getProperty ("runNext", -1); r >= 0 && r < (int) show.run.size())
+        runNextUid = show.run[(size_t) r].uid;
+    else
+        runNextUid = 0;
+    if (const int r = (int) info.getProperty ("runOnAir", -1); r >= 0 && r < (int) show.run.size())
+        runOnAirUid = show.run[(size_t) r].uid;
+    if (auto* items = info.getProperty ("scheduleItems", {}).getArray())
+        for (int i = 0; i < std::min (items->size(), (int) show.schedule.size()); ++i)
+        {
+            auto& s = show.schedule[(size_t) i];
+            const auto& o = (*items)[i];
+            s.state = (ScheduleItem::State) juce::jlimit (0, 3, (int) o.getProperty ("state", 0));
+            s.fireAt = (juce::int64) o.getProperty ("fireAt", 0);
+            s.held = (bool) o.getProperty ("held", false);
+            s.heldSeconds = (double) o.getProperty ("heldSeconds", 0.0);
+            if (s.state == ScheduleItem::waiting && s.fireAt < nowMs() - 2000)
+                s.state = ScheduleItem::missed;   // passed while nobody was running it: never fires late
+        }
+    scheduleRunning = (bool) info.getProperty ("scheduleRunning", false);
+    sendChangeMessage();
+}
+
+void ShowController::setMirroring (bool on)
+{
+    mirroring = on;
+    if (on && autosave != nullptr)
+        autosave->discard();     // the show here is the main laptop's, kept there
+}
+
+void ShowController::applyMirror (const juce::var& incoming, const std::function<juce::File (const juce::File&)>& localFile)
+{
+    Show next;
+    if (! next.fromVar (incoming))
+        return;
+    while (show.banks.size() < next.banks.size())
+        show.banks.emplace_back();
+    for (int b = 0; b < (int) next.banks.size(); ++b)
+    {
+        show.banks[(size_t) b].name = next.banks[(size_t) b].name;
+        for (int s = 0; s < Show::cuesPerBank; ++s)
+        {
+            const int id = Show::cueId (b, s);
+            auto c = next.cue (id);
+            c.file = c.isEmpty() ? juce::File() : localFile (c.file);
+            auto& mine = show.cue (id);
+            const bool newFile = mine.file != c.file;
+            bool newPlugins = false;
+            for (size_t p = 0; p < c.plugins.size(); ++p)
+                newPlugins = newPlugins || c.plugins[p].description != mine.plugins[p].description || c.plugins[p].state != mine.plugins[p].state;
+            mine = c;
+            if (newFile)
+            {
+                engine.stopCue (id, false);
+                if (auto it = media.find (id); it != media.end())
+                {
+                    retire (it->second);
+                    media.erase (it);
+                }
+                errors.erase (id);
+                loading.erase (id);
+                loadAudio (id);
+            }
+            if (newPlugins)
+            {
+                retireFx (id);
+                if (c.hasPlugins())
+                    createPlugins (id);
+            }
+        }
+    }
+    while (show.banks.size() > next.banks.size())
+    {
+        for (int s = 0; s < Show::cuesPerBank; ++s)
+            clearCue (Show::cueId ((int) show.banks.size() - 1, s));
+        show.banks.pop_back();
+    }
+    show.playlists = next.playlists;
+    show.run = next.run;
+    show.schedule = next.schedule;
+    show.playbackMode = next.playbackMode;
+    show.selfDestruct = next.selfDestruct;
+    assignUids();
+    assignRunUids();
+    selectedPlaylist = juce::jlimit (0, std::max (0, (int) show.playlists.size() - 1), selectedPlaylist);
+    dirty = false;
+    sendChangeMessage();
+}
+
+void ShowController::playMirrored (int id, double position, bool looping)
+{
+    auto audio = getAudio (id);
+    if (audio == nullptr || ! show.isValid (id))
+        return;
+    PlayPlan plan;
+    const auto& cue = show.cue (id);
+    if (! (looping ? PlayPlan::makeLoop (cue, *audio, id, plan) : PlayPlan::make (cue, *audio, id, plan)))
+        return;
+    plan.startAt = juce::jlimit<juce::int64> (0, std::max<juce::int64> (0, plan.length - 1), (juce::int64) (position * engine.getSampleRate()));
+    plan.takeOver = PlaybackMode::overlap;   // what stops is the main laptop's decision
+    attachFx (plan);
+    engine.play (plan);
+}
+
+void ShowController::updateAutosave()
+{
+    if (autosave == nullptr)
+        return;
+    const auto now = juce::Time::getMillisecondCounter();
+    if (! autosaveNow && now - lastAutosave < autosaveMs)
+        return;
+    autosaveNow = false;
+    lastAutosave = now;
+    // a saved show running a countdown or part way down its run of show has something to lose too
+    if (! dirty && juce::JSON::toString (positionVar(), true) == savedPosition)
+        return;
+    if (! fx.empty() && engine.getVoices().empty())
+        storePluginStates();
+    autosave->submit (recoveryVar());
+}
+
+void ShowController::markPositionSaved()
+{
+    savedPosition = juce::JSON::toString (positionVar(), true);
 }

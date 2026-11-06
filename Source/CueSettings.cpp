@@ -28,6 +28,9 @@ CueSettings::CueSettings (ShowController& c) : controller (c), waveform (c), fxP
     colourButton.setTooltip ("The button's colour (also on the Stream Deck)");
     colourButton.onClick = [this] { Look::showColourMenu (colourButton, controller, cueId); };
     addAndMakeVisible (colourButton);
+    loudnessButton.setWantsKeyboardFocus (false);
+    loudnessButton.onClick = [this] { showLoudnessMenu(); };
+    addAndMakeVisible (loudnessButton);
 
     name.onTextChange = [this] { if (auto* q = cue()) { q->name = name.getText(); changed(); } };
     addAndMakeVisible (name);
@@ -350,7 +353,12 @@ void CueSettings::resized()
         name.setBounds (nameRow);
     }
     output.setBounds (labelled (outputLabel, 28));
-    level.setBounds (labelled (levelLabel, 26));
+    {
+        auto levelRow = labelled (levelLabel, 26);
+        loudnessButton.setBounds (levelRow.removeFromRight (92));
+        levelRow.removeFromRight (6);
+        level.setBounds (levelRow);
+    }
     pan.setBounds (labelled (panLabel, 26));
     for (auto* f : { &fadeIn, &fadeOut, &stopFade })
     {
@@ -599,4 +607,51 @@ void CueSettings::timerCallback()
     recordButton.setEnabled (rec || armButton.getToggleState());
     armButton.setEnabled (! rec);
     repaint (meterArea.expanded (2));
+}
+
+void CueSettings::showLoudnessMenu()
+{
+    auto& show = controller.getShow();
+    if (! show.isValid (cueId) || show.cue (cueId).isEmpty())
+        return;
+    const auto& c = show.cue (cueId);
+    const auto suggested = controller.suggestedLevel (cueId);
+    juce::PopupMenu m;
+    if (c.lufs < 0.0)
+        m.addSectionHeader (juce::String (c.lufs, 1) + " LUFS, peak " + juce::String (c.peakDb, 1) + " dB");
+    else
+        m.addSectionHeader (controller.isMeasuring() ? "Measuring..." : "Not measured");
+    m.addItem (1, "Music (target " + juce::String (controller.getMusicTarget(), 1) + " LUFS)", true, ! c.voiceOver);
+    m.addItem (2, "Voice-over (target " + juce::String (controller.getVoiceTarget(), 1) + " LUFS)", true, c.voiceOver);
+    m.addSeparator();
+    const bool clips = suggested.has_value() && c.peakDb + *suggested > 0.0;
+    m.addItem (3, suggested.has_value() ? "Apply suggested level: " + juce::String (*suggested, 1) + " dB" + (clips ? " (peaks over 0 dB!)" : "")
+                                        : juce::String ("Apply suggested level"), suggested.has_value());
+    m.addItem (4, "Apply to every button in the show");
+    m.addSeparator();
+    m.addItem (5, "Targets...");
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (loudnessButton),
+                     [safe = juce::Component::SafePointer<CueSettings> (this)] (int result)
+    {
+        if (safe == nullptr || result <= 0)
+            return;
+        auto& ctrl = safe->controller;
+        auto& s = ctrl.getShow();
+        const int id = safe->cueId;
+        if (result <= 2 && s.isValid (id))
+        {
+            s.cue (id).voiceOver = result == 2;
+            ctrl.cueChanged (id);
+        }
+        else if (result == 3)
+            ctrl.applyLoudness (id);
+        else if (result == 4)
+        {
+            for (int b = 0; b < (int) s.banks.size(); ++b)
+                for (int i = 0; i < Show::cuesPerBank; ++i)
+                    ctrl.applyLoudness (Show::cueId (b, i));
+        }
+        else if (result == 5 && safe->onLoudnessTargets)
+            safe->onLoudnessTargets();
+    });
 }

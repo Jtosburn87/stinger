@@ -101,6 +101,15 @@ const std::vector<CommandMap::Command>& CommandMap::commands()
         add ("globalKeys", "Global keys on/off");
         add ("selfDestruct", "Self Destruct on/off");
         add ("resetColours", "Reset colours (Self Destruct)");
+        add ("runGo", "Run of show: GO");
+        add ("runNext", "Run of show: NEXT one down");
+        add ("runPrev", "Run of show: NEXT one up");
+        add ("schedStart", "Schedule: start / stop");
+        add ("schedGo", "Schedule: GO NOW");
+        add ("hold1", "Schedule: hold 1 minute");
+        add ("hold2", "Schedule: hold 2 minutes");
+        add ("hold5", "Schedule: hold 5 minutes");
+        add ("hold10", "Schedule: hold 10 minutes");
         static const char* rows[4] = { "123456", "QWERTY", "ASDFGH", "ZXCVBN" };
         for (int s = 0; s < 24; ++s)
             add (("slot" + juce::String (s + 1)).toRawUTF8(), "Button " + juce::String (s + 1) + " of the shown bank",

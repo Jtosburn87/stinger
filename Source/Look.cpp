@@ -136,6 +136,10 @@ namespace Look
     LookAndFeel::LookAndFeel()
     {
         setColour (juce::ResizableWindow::backgroundColourId, ground);
+        setColour (juce::TableHeaderComponent::backgroundColourId, raised);
+        setColour (juce::TableHeaderComponent::textColourId, textDim);
+        setColour (juce::TableHeaderComponent::outlineColourId, line);
+        setColour (juce::TableHeaderComponent::highlightColourId, edge);
         setColour (juce::TextButton::buttonColourId, raised);
         setColour (juce::TextButton::buttonOnColourId, amberDark);
         setColour (juce::TextButton::textColourOffId, text);

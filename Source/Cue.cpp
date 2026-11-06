@@ -183,6 +183,14 @@ juce::var Cue::toVar() const
     o->setProperty ("colour", colour);
     if (customColour != 0)
         o->setProperty ("customColour", juce::String::toHexString ((juce::int64) customColour));
+    if (voiceOver)
+        o->setProperty ("voiceOver", true);
+    if (lufs < 0.0)
+    {
+        o->setProperty ("lufs", lufs);
+        o->setProperty ("peakDb", peakDb);
+        o->setProperty ("lufsKey", lufsKey);
+    }
     if (spent)
         o->setProperty ("spent", true);
     o->setProperty ("trimIn", trimIn);
@@ -252,6 +260,10 @@ Cue Cue::fromVar (const juce::var& v)
     c.colour = (int) v.getProperty ("colour", 0);
     c.customColour = (juce::uint32) v.getProperty ("customColour", {}).toString().getHexValue64();
     c.spent = (bool) v.getProperty ("spent", false);
+    c.voiceOver = (bool) v.getProperty ("voiceOver", false);
+    c.lufs = (double) v.getProperty ("lufs", 0.0);
+    c.peakDb = (double) v.getProperty ("peakDb", -120.0);
+    c.lufsKey = v.getProperty ("lufsKey", {}).toString();
     c.trimIn = std::max (0.0, (double) v.getProperty ("trimIn", 0.0));
     c.trimOut = (double) v.getProperty ("trimOut", -1.0);
     if (auto* list = v.getProperty ("cuts", {}).getArray())
