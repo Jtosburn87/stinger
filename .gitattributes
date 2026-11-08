@@ -3,3 +3,4 @@
 *.yml text eol=lf
 *.png binary
 android/gradlew text eol=lf
+android/juce-patches/*.patch -text
