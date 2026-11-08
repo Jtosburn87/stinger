@@ -694,6 +694,47 @@ void MobileMainPage::rebuildBanks()
     resized();
 }
 
+void MobileMainPage::showBank (int index)
+{
+    const int count = (int) controller.getShow().banks.size();
+    if (count <= 0)
+        return;
+    bank = ((index % count) + count) % count;
+    grid.setBank (bank);
+    rebuildBanks();
+}
+
+void MobileMainPage::perform (const juce::String& action)
+{
+    auto& show = controller.getShow();
+    const int list = controller.getSelectedPlaylist();
+    if (action.startsWith ("slot"))
+    {
+        const int id = Show::cueId (bank, action.fromFirstOccurrenceOf ("slot", false, false).getIntValue() - 1);
+        if (show.isValid (id) && ! show.cue (id).isEmpty())
+            controller.trigger (id);
+    }
+    else if (action.startsWith ("bank") && action.length() > 4 && action.substring (4).containsOnly ("0123456789"))
+        showBank (action.substring (4).getIntValue() - 1);
+    else if (action.startsWith ("go") && action.length() > 2 && action.substring (2).containsOnly ("0123456789"))
+    {
+        const int pl = action.substring (2).getIntValue() - 1;   // GO playlist N
+        if (pl >= 0 && pl < (int) show.playlists.size())
+            controller.go (pl);
+    }
+    else if (action == "go")           controller.go (list);
+    else if (action == "fadeNext")     controller.fadeToNext (list);
+    else if (action == "stopAll")      controller.getEngine().stopAll (false);
+    else if (action == "fadeAll")      controller.getEngine().stopAll (true);
+    else if (action == "bankNext")     showBank (bank + 1);
+    else if (action == "bankPrev")     showBank (bank - 1);
+    else if (action == "selfDestruct") controller.setSelfDestruct (! controller.isSelfDestruct());
+    else if (action == "resetColours") controller.resetColours();
+    else if (action == "runGo")        controller.runGo();
+    else if (action == "schedGo")      controller.scheduleGoNow();
+    else if (action.startsWith ("hold")) controller.holdSchedule (action.substring (4).getIntValue());
+}
+
 void MobileMainPage::refresh()
 {
     if (bankButtons.size() != (int) controller.getShow().banks.size())

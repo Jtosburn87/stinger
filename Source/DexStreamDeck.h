@@ -1,7 +1,7 @@
 #pragma once
-#include "MainComponent.h"
+#include "DexDeck.h"
 
-/** A real Elgato Stream Deck on Android (Samsung DeX), driven by Stinger itself (StreamDeckUsb.java does the USB).
+/** A real Elgato Stream Deck on Android (phone pages or Samsung DeX), driven by Stinger itself (StreamDeckUsb.java does the USB).
     Fixed layouts for now:
       15 keys (5 x 3): buttons 1-12 of the shown bank, then GO, Stop all, Next bank
       XL (8 x 4):      the 24 buttons where they are in Stinger (6 x 4), then two columns:
@@ -11,7 +11,7 @@
 class DexStreamDeck : private juce::Timer
 {
 public:
-    explicit DexStreamDeck (MainComponent& desktop);
+    explicit DexStreamDeck (DexDeck& server);
     ~DexStreamDeck() override;
 
     /** The deck as StreamDeckUsb reported it (connected or not). Message thread. */
@@ -31,7 +31,7 @@ private:
     juce::Image draw (const Key& key, const juce::var& state, int pixels) const;
     void send (int index, const juce::Image& picture);
 
-    MainComponent& desktop;
+    DexDeck& server;
     juce::String lastState;
     std::vector<juce::String> shown;   // per key: what its picture shows (a new picture only when this changes)
 };

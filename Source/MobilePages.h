@@ -149,6 +149,12 @@ private:
     void askName (std::function<void (juce::String)> done);
     void message (const juce::String& text);
     void setOpen (bool playlistSection, bool open);
+public:
+    /** A key from the deck or a Stream Deck (same ids as the desktop's: "slot7", "go", "bankNext"...). */
+    void perform (const juce::String& action);
+    int getBank() const { return bank; }
+private:
+    void showBank (int index);
     void setButtonCount (int count);
     /** Says so if songs sit on buttons the page isn't showing. */
     void warnAboutHiddenButtons();
@@ -186,4 +192,7 @@ private:
     MobileMainPage mainPage;
     MobileEditorPage editorPage;
     MobileAudioPage audioPage;
+
+public:
+    MobileMainPage& getMainPage() { return mainPage; }
 };

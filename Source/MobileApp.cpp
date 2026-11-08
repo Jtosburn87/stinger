@@ -50,11 +50,34 @@ public:
         root = std::make_unique<MobileRoot> (*controller, settings);
         window = std::make_unique<Window> (root.get());
 
+        // the keys (the DeX deck page, a Stream Deck) work from the start: on the phone pages until DeX takes over
+        deck = std::make_unique<DexDeck> (*controller);
+        DexBridge::setDeckUrl (deck->url());
+        streamDeck = std::make_unique<DexStreamDeck> (*deck);
+        pointKeysAt (false);
+
         // Samsung DeX: the computer app's screen on the monitor, the touch pages on the phone
         DexBridge::setOnChange ([this] (bool on) { showDesktop (on); });
         DexBridge::start();
         if (DexBridge::isDesktop())
             showDesktop (true);
+    }
+
+    /** The deck page's and the Stream Deck's keys act on the screen in charge. */
+    void pointKeysAt (bool onDesktop)
+    {
+        if (deck == nullptr)
+            return;
+        if (onDesktop && desktop != nullptr)
+        {
+            auto& server = desktop->getStreamDeck();
+            deck->setTarget (server.perform, server.shownBank);
+            return;
+        }
+        auto& page = root->getMainPage();
+        juce::Component::SafePointer<MobileMainPage> safe (&page);
+        deck->setTarget ([safe] (const juce::String& action) { if (safe != nullptr) safe->perform (action); },
+                         [safe] { return safe != nullptr ? safe->getBank() : 0; });
     }
 
     /** Swaps the window's content. The window is made again so it takes the new screen's size and density. */
@@ -65,10 +88,9 @@ public:
         if (on && desktop == nullptr)
         {
             desktop = std::make_unique<MainComponent> (*controller, *properties.getUserSettings());
-            deck = std::make_unique<DexDeck> (*controller, *desktop);
-            DexBridge::setDeckUrl (deck->url());
-            streamDeck = std::make_unique<DexStreamDeck> (*desktop);
+            deck->setLayouts (&desktop->getRemote());
         }
+        pointKeysAt (on);
         const_cast<juce::Displays&> (juce::Desktop::getInstance().getDisplays()).refresh();
         window = nullptr;
         window = std::make_unique<Window> (on ? static_cast<juce::Component*> (desktop.get()) : root.get());
@@ -87,7 +109,7 @@ public:
         window = nullptr;
         DexBridge::setDeckUrl ({});
         streamDeck = nullptr;
-        deck = nullptr;
+        deck = nullptr;   // before the screens its keys act on
         desktop = nullptr;
         root = nullptr;
         if (controller != nullptr)
@@ -149,8 +171,8 @@ private:
     std::unique_ptr<PluginHost> pluginHost;
     std::unique_ptr<MobileRoot> root;
     std::unique_ptr<MainComponent> desktop;   // made the first time DeX shows it, then kept
-    std::unique_ptr<DexDeck> deck;            // the phone screen's keys while in DeX (made with desktop)
-    std::unique_ptr<DexStreamDeck> streamDeck;   // a real Stream Deck plugged into the phone (made with desktop)
+    std::unique_ptr<DexDeck> deck;            // the key server: the DeX deck page and a Stream Deck, from the start
+    std::unique_ptr<DexStreamDeck> streamDeck;   // a real Stream Deck plugged into the phone, phone pages or DeX
     std::unique_ptr<Window> window;
 };
 

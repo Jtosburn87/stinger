@@ -45,7 +45,7 @@ namespace
     }
 }
 
-DexStreamDeck::DexStreamDeck (MainComponent& d) : desktop (d)
+DexStreamDeck::DexStreamDeck (DexDeck& s) : server (s)
 {
     instance = this;
     deckChanged();
@@ -98,15 +98,15 @@ void DexStreamDeck::keyPressed (int key)
     if (! deck.connected || key < 0 || key >= deck.keys)
         return;
     const auto k = keyAt (key);
-    if (k.action.isNotEmpty() && desktop.getStreamDeck().perform)
-        desktop.getStreamDeck().perform (k.action);
+    if (k.action.isNotEmpty() && server.getServer().perform)
+        server.getServer().perform (k.action);
 }
 
 void DexStreamDeck::timerCallback()
 {
     if (! deck.connected || usbClass == nullptr)
         return;
-    const auto text = desktop.getStreamDeck().stateJson();
+    const auto text = server.getServer().stateJson();
     if (text == lastState)
         return;
     lastState = text;
