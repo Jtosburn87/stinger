@@ -3,6 +3,7 @@
 #include "MainComponent.h"
 #include "DexBridge.h"
 #include "DexDeck.h"
+#include "DexStreamDeck.h"
 #include "Look.h"
 #include "PluginHost.h"
 #include "Autosave.h"
@@ -66,6 +67,7 @@ public:
             desktop = std::make_unique<MainComponent> (*controller, *properties.getUserSettings());
             deck = std::make_unique<DexDeck> (*controller, *desktop);
             DexBridge::setDeckUrl (deck->url());
+            streamDeck = std::make_unique<DexStreamDeck> (*desktop);
         }
         const_cast<juce::Displays&> (juce::Desktop::getInstance().getDisplays()).refresh();
         window = nullptr;
@@ -84,6 +86,7 @@ public:
             engine->shutdownAudio();
         window = nullptr;
         DexBridge::setDeckUrl ({});
+        streamDeck = nullptr;
         deck = nullptr;
         desktop = nullptr;
         root = nullptr;
@@ -147,6 +150,7 @@ private:
     std::unique_ptr<MobileRoot> root;
     std::unique_ptr<MainComponent> desktop;   // made the first time DeX shows it, then kept
     std::unique_ptr<DexDeck> deck;            // the phone screen's keys while in DeX (made with desktop)
+    std::unique_ptr<DexStreamDeck> streamDeck;   // a real Stream Deck plugged into the phone (made with desktop)
     std::unique_ptr<Window> window;
 };
 

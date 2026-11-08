@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Elgato Stream Decks (vendor 0x0fd9): plugged in, Android offers them to Stinger (StreamDeckUsb.java).
+     Which models Stinger drives is decided in StreamDeckUsb.modelOf. -->
+<resources>
+    <usb-device vendor-id="4057" />
+</resources>

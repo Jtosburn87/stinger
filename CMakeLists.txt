@@ -114,7 +114,7 @@ target_sources(Stinger PRIVATE
 
 if(ANDROID)
     # Touch pages for the phone's own screen (see android/). JUCE's Java code loads the app by the name juce_jni.
-    target_sources(Stinger PRIVATE Source/MobileApp.cpp Source/MobilePages.cpp Source/DexBridge.cpp Source/StockFxEditor.cpp Source/AndroidFiles.cpp Source/DexDeck.cpp)
+    target_sources(Stinger PRIVATE Source/MobileApp.cpp Source/MobilePages.cpp Source/DexBridge.cpp Source/StockFxEditor.cpp Source/AndroidFiles.cpp Source/DexDeck.cpp Source/DexStreamDeck.cpp)
     # Samsung DeX: the computer app's screens, on the monitor. Android only: the computer build below is untouched.
     target_sources(Stinger PRIVATE
         Source/MainComponent.cpp

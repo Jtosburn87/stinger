@@ -65,7 +65,17 @@ public class StingerActivity extends Activity
         getWindow().addFlags (WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         Dex.log (this, "created");
         MouseBridge.init();
+        StreamDeckUsb.scan (this);   // a Stream Deck already plugged in
         ((DisplayManager) getSystemService (Context.DISPLAY_SERVICE)).registerDisplayListener (displays, handler);
+    }
+
+    /** A Stream Deck plugged in while Stinger runs (Android offers it to Stinger: res/xml/stream_deck_filter.xml). */
+    @Override
+    protected void onNewIntent (Intent intent)
+    {
+        super.onNewIntent (intent);
+        if (android.hardware.usb.UsbManager.ACTION_USB_DEVICE_ATTACHED.equals (intent.getAction()))
+            StreamDeckUsb.scan (this);
     }
 
     @Override
