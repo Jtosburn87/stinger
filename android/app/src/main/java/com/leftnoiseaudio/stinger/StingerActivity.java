@@ -66,6 +66,7 @@ public class StingerActivity extends Activity
         Dex.log (this, "created");
         MouseBridge.init();
         StreamDeckUsb.scan (this);   // a Stream Deck already plugged in
+        com.leftnoiseaudio.duo.JuceHinge.watch (this);   // a Surface Duo spanned over both screens (C:/Duo)
         ((DisplayManager) getSystemService (Context.DISPLAY_SERVICE)).registerDisplayListener (displays, handler);
     }
 
@@ -100,6 +101,7 @@ public class StingerActivity extends Activity
         Log.i (Dex.TAG, "Stinger window closed");
         ((DisplayManager) getSystemService (Context.DISPLAY_SERVICE)).unregisterDisplayListener (displays);
         handler.removeCallbacksAndMessages (null);
+        com.leftnoiseaudio.duo.Hinge.stop();
         super.onDestroy();
     }
 

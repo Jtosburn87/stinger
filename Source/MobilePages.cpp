@@ -777,11 +777,80 @@ void MobileMainPage::paint (juce::Graphics& g)
 {
     g.fillAll (Look::ground);
     g.setColour (Look::panel);
-    g.fillRect (getLocalBounds().removeFromTop (barHeight));
+    g.fillRect ((isSplit() ? splitFirst : getLocalBounds()).removeFromTop (barHeight));
+}
+
+void MobileMainPage::setSplit (juce::Rectangle<int> first, juce::Rectangle<int> second, bool across)
+{
+    splitFirst = first;
+    splitSecond = second;
+    splitAcross = across;
+    resized();
+    refresh();
+}
+
+void MobileMainPage::layoutSplit()
+{
+    // first screen: the menu bar, then Playlist and Now Playing open side by side (above each other on an upright screen)
+    auto r = splitFirst;
+    auto bar = r.removeFromTop (barHeight).reduced (8, 7);
+    menuButton.setBounds (bar.removeFromLeft (46));
+    bar.removeFromLeft (10);
+    editButton.setBounds (bar.removeFromRight (72));
+    bar.removeFromRight (8);
+    showName.setBounds (bar);
+
+    playlistHeader.setVisible (false);   // nothing to fold away: both are always open here
+    nowHeader.setVisible (false);
+    playlist.setVisible (true);
+    nowPlaying.setVisible (true);
+    if (r.getWidth() >= r.getHeight())
+    {
+        playlist.setBounds (r.removeFromLeft (r.getWidth() / 2));
+        nowPlaying.setBounds (r);
+    }
+    else
+    {
+        playlist.setBounds (r.removeFromTop (r.getHeight() / 2));
+        nowPlaying.setBounds (r);
+    }
+
+    // second screen: banks, the buttons, and GO / STOP / FADE along the bottom
+    r = splitSecond;
+    auto tabs = r.removeFromTop (tabHeight).reduced (8, 3);
+    if (! bankButtons.isEmpty())
+    {
+        const int width = (tabs.getWidth() - 4 * (bankButtons.size() - 1)) / bankButtons.size();
+        for (auto* b : bankButtons)
+        {
+            b->setBounds (tabs.removeFromLeft (width));
+            tabs.removeFromLeft (4);
+        }
+    }
+    r.removeFromBottom (gestureBarHeight);
+    auto transport = r.removeFromBottom (std::max (minTransportHeight, splitSecond.getHeight() / 5)).reduced (8, 4);
+    const int gap = 8, quarter = (transport.getWidth() - 2 * gap) / 4;
+    fadeAllButton.setBounds (transport.removeFromLeft (quarter));
+    transport.removeFromLeft (gap);
+    stopAllButton.setBounds (transport.removeFromLeft (quarter));
+    transport.removeFromLeft (gap);
+    goButton.setBounds (transport);
+
+    const bool wide = splitSecond.getWidth() >= splitSecond.getHeight();
+    grid.setShape (wide || buttonCount == 16 ? 4 : buttonCount == 12 ? 3 : 2, buttonCount, false);
+    grid.setBounds (r.reduced (6, 4));
 }
 
 void MobileMainPage::resized()
 {
+    if (isSplit())
+    {
+        layoutSplit();
+        return;
+    }
+    playlistHeader.setVisible (true);
+    nowHeader.setVisible (true);
+
     auto r = getLocalBounds();
     auto bar = r.removeFromTop (barHeight).reduced (8, 7);
     menuButton.setBounds (bar.removeFromLeft (46));
@@ -998,18 +1067,56 @@ void MobileRoot::show (juce::Component& page)
     juce::Component::unfocusAllComponents();   // takes the keyboard away with the page
     for (auto* p : std::initializer_list<juce::Component*> { &mainPage, &editorPage, &audioPage })
         p->setVisible (p == &page);
+    if (! hinge.isEmpty())
+        mainPage.setVisible (true);   // spanned: the buttons stay on their screen, the page covers the other
 }
 
 bool MobileRoot::goBack()
 {
-    if (mainPage.isVisible())
+    if (! editorPage.isVisible() && ! audioPage.isVisible())
         return false;
     show (mainPage);
     return true;
 }
 
+void MobileRoot::setHinge (juce::Rectangle<int> newHinge, bool across)
+{
+    // a hinge with no room either side isn't a second screen
+    if (! newHinge.isEmpty() && (across ? newHinge.getY() < 200 || getHeight() - newHinge.getBottom() < 200
+                                        : newHinge.getX() < 200 || getWidth() - newHinge.getRight() < 200))
+        newHinge = {};
+    if (newHinge == hinge && across == hingeAcross)
+        return;
+    hinge = newHinge;
+    hingeAcross = across;
+    // back on one screen: the page that was open on the first screen becomes the whole screen, as on any phone
+    if (hinge.isEmpty() && (editorPage.isVisible() || audioPage.isVisible()))
+        mainPage.setVisible (false);
+    else if (! hinge.isEmpty())
+        mainPage.setVisible (true);
+    resized();
+    repaint();
+}
+
+void MobileRoot::paint (juce::Graphics& g)
+{
+    g.fillAll (juce::Colours::black);   // behind the hinge
+}
+
 void MobileRoot::resized()
 {
-    for (auto* p : std::initializer_list<juce::Component*> { &mainPage, &editorPage, &audioPage })
-        p->setBounds (getLocalBounds());
+    if (hinge.isEmpty() || (hingeAcross ? hinge.getBottom() > getHeight() : hinge.getRight() > getWidth()))
+    {
+        mainPage.setSplit ({}, {}, false);
+        for (auto* p : std::initializer_list<juce::Component*> { &mainPage, &editorPage, &audioPage })
+            p->setBounds (getLocalBounds());
+        return;
+    }
+    auto all = getLocalBounds();
+    const auto first = hingeAcross ? all.withBottom (hinge.getY()) : all.withRight (hinge.getX());
+    const auto second = hingeAcross ? all.withTop (hinge.getBottom()) : all.withLeft (hinge.getRight());
+    mainPage.setBounds (all);
+    mainPage.setSplit (first, second, hingeAcross);
+    editorPage.setBounds (first);
+    audioPage.setBounds (first);
 }

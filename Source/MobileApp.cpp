@@ -2,6 +2,7 @@
 #include "MobilePages.h"
 #include "MainComponent.h"
 #include "DexBridge.h"
+#include "DuoBridge.h"
 #include "DexDeck.h"
 #include "DexStreamDeck.h"
 #include "Look.h"
@@ -61,6 +62,13 @@ public:
         DexBridge::start();
         if (DexBridge::isDesktop())
             showDesktop (true);
+
+        // Surface Duo spanned over both screens: menus and editor on one, buttons on the other
+        DuoBridge::setOnChange ([this] (DuoBridge::Hinge hinge)
+        {
+            if (root != nullptr)
+                root->setHinge (root->getLocalArea (nullptr, hinge.bounds), hinge.across);
+        });
     }
 
     /** The deck page's and the Stream Deck's keys act on the screen in charge. */

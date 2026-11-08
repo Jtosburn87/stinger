@@ -136,7 +136,16 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
+    /** A Surface Duo spanned over both screens: the menu bar, Playlist and Now Playing go in "first" (the top screen
+        with the phone on its side), the banks, buttons, GO, FADE and STOP in "second". Empty rectangles = one screen. */
+    void setSplit (juce::Rectangle<int> first, juce::Rectangle<int> second, bool across);
+    bool isSplit() const { return ! splitFirst.isEmpty(); }
+
 private:
+    void layoutSplit();
+    juce::Rectangle<int> splitFirst, splitSecond;
+    bool splitAcross = false;
+
     void changeListenerCallback (juce::ChangeBroadcaster*) override { refresh(); }
     void timerCallback() override { refresh(); }
     void refresh();
@@ -183,11 +192,17 @@ public:
     MobileRoot (ShowController& controller, juce::PropertiesFile& settings);
 
     void resized() override;
+    void paint (juce::Graphics&) override;
+    /** Surface Duo: the hinge in this component (empty = one screen). Spanned, the editor and Audio open on the
+        first screen and the buttons stay on the second. */
+    void setHinge (juce::Rectangle<int> hinge, bool across);
     /** The phone's back gesture: true if it took a page back. */
     bool goBack();
 
 private:
     void show (juce::Component& page);
+    juce::Rectangle<int> hinge;
+    bool hingeAcross = false;
 
     MobileMainPage mainPage;
     MobileEditorPage editorPage;
