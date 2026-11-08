@@ -1,4 +1,7 @@
 #include "CueGrid.h"
+#if JUCE_ANDROID
+ #include "AndroidFiles.h"
+#endif
 #include "Look.h"
 
 CueGrid::CueGrid (ShowController& c) : controller (c)
@@ -66,17 +69,18 @@ juce::String CueGrid::outputLabel (const OutputRoute& route)
 
 juce::Rectangle<float> CueGrid::slotBounds (int slot) const
 {
-    const float gap = 10.0f;
+    const float gap = showKeys ? 10.0f : 5.0f;
     const auto area = getLocalBounds().toFloat();
-    const float w = (area.getWidth() - gap * (Show::columns - 1)) / Show::columns;
-    const float h = (area.getHeight() - gap * (Show::rows - 1)) / Show::rows;
-    const int row = slot / Show::columns, column = slot % Show::columns;
+    const int rows = (numShown + columns - 1) / columns;
+    const float w = (area.getWidth() - gap * (columns - 1)) / columns;
+    const float h = (area.getHeight() - gap * (rows - 1)) / rows;
+    const int row = slot / columns, column = slot % columns;
     return { column * (w + gap), row * (h + gap), w, h };
 }
 
 int CueGrid::slotAt (juce::Point<int> p) const
 {
-    for (int s = 0; s < Show::cuesPerBank; ++s)
+    for (int s = 0; s < numShown; ++s)
         if (slotBounds (s).contains (p.toFloat()))
             return s;
     return -1;
@@ -84,7 +88,7 @@ int CueGrid::slotAt (juce::Point<int> p) const
 
 void CueGrid::paint (juce::Graphics& g)
 {
-    for (int s = 0; s < Show::cuesPerBank; ++s)
+    for (int s = 0; s < numShown; ++s)
         paintSlot (g, s);
 }
 
@@ -147,7 +151,7 @@ void CueGrid::paintSlot (juce::Graphics& g, int slot)
 
     // top row: key + length
     auto top = inner.removeFromTop (18.0f);
-    const auto key = keyFor (slot);
+    const auto key = showKeys ? keyFor (slot) : juce::KeyPress();
     if (key.isValid() && ! empty)
     {
         auto keyText = key.getTextDescriptionWithIcons().toUpperCase();
@@ -176,11 +180,12 @@ void CueGrid::paintSlot (juce::Graphics& g, int slot)
     g.drawText (length, top, juce::Justification::centredRight);
 
     // name
-    inner.removeFromTop (6.0f);
-    auto badges = inner.removeFromBottom (16.0f);
+    // touch screens: the name gets all the room, the badges share the top row with the time
+    inner.removeFromTop (showKeys ? 6.0f : 3.0f);
+    auto badges = showKeys ? inner.removeFromBottom (16.0f) : top;
     g.setColour (empty ? Look::textFaint : onFill);
-    g.setFont (Look::font (empty ? 13.0f : 15.0f, ! empty));
-    g.drawFittedText (empty ? juce::String::fromUTF8 ("Empty \xe2\x80\x94 drop a file or double-click") : cue.name,
+    g.setFont (Look::font (empty ? 13.0f : showKeys ? 15.0f : 20.0f, ! empty));
+    g.drawFittedText (empty ? (showKeys ? juce::String::fromUTF8 ("Empty \xe2\x80\x94 drop a file or double-click") : juce::String ("Double-tap to add a song")) : cue.name,
                       inner.toNearestInt(), juce::Justification::topLeft, 3, 0.9f);
 
     if (! empty)
@@ -225,38 +230,81 @@ void CueGrid::mouseDown (const juce::MouseEvent& e)
     if (slot < 0)
         return;
     const int id = Show::cueId (bank, slot);
+    dragged = false;
+    held = false;
+    ++holdNumber;
     select (id);
     if (e.mods.isPopupMenu())
         showMenu (id);
     else if (controller.getShow().cue (id).isEmpty())
         return;   // empty: just selected (double-click chooses a file)
     else if (editMode || e.mods.isCommandDown())
-        return;   // edit mode / Ctrl: select and drag, no playing
+    {
+        if (editMode && onHoldInEditMode != nullptr)   // edit mode / Ctrl: select and drag, no playing
+            startHold (id);
+    }
     else
         controller.trigger (id);
+}
+
+void CueGrid::startHold (int id)
+{
+    const auto number = holdNumber;
+    juce::Component::SafePointer<CueGrid> safe (this);
+    juce::Timer::callAfterDelay (500, [safe, number, id]
+    {
+        if (safe == nullptr || safe->holdNumber != number || ! safe->editMode)
+            return;
+        safe->held = true;
+        safe->onHoldInEditMode (id);
+    });
 }
 
 void CueGrid::mouseDoubleClick (const juce::MouseEvent& e)
 {
     const int slot = slotAt (e.getPosition());
-    if (slot >= 0 && ! e.mods.isPopupMenu() && controller.getShow().cue (Show::cueId (bank, slot)).isEmpty())
+    if (slot >= 0 && onChooseFile == nullptr && ! e.mods.isPopupMenu() && controller.getShow().cue (Show::cueId (bank, slot)).isEmpty())
         chooseFile (Show::cueId (bank, slot));
 }
 
 void CueGrid::mouseDrag (const juce::MouseEvent& e)
 {
-    if (! (editMode || e.mods.isCommandDown()) || e.getDistanceFromDragStart() < 6)
+    if (held || ! (editMode || e.mods.isCommandDown()) || e.getDistanceFromDragStart() < 6)
         return;
+    ++holdNumber;
     const int slot = slotAt (e.getMouseDownPosition());
     if (slot < 0 || controller.getShow().cue (Show::cueId (bank, slot)).isEmpty())
         return;
     if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor (this); container != nullptr && ! container->isDragAndDropActive())
     {
+        dragged = true;
         const auto r = slotBounds (slot).toNearestInt();
         auto image = createComponentSnapshot (r).convertedToFormat (juce::Image::ARGB);
         image.multiplyAllAlphas (0.7f);
         container->startDragging ("cue:" + juce::String (Show::cueId (bank, slot)), this, juce::ScaledImage (image), true);
     }
+}
+
+void CueGrid::mouseUp (const juce::MouseEvent& e)
+{
+    ++holdNumber;
+    if (onChooseFile != nullptr && ! editMode && e.getDistanceFromDragStart() < 12)
+    {
+        const int slot = slotAt (e.getPosition());
+        const auto now = juce::Time::getMillisecondCounter();
+        if (slot >= 0 && slot == lastTapSlot && now - lastTapTime < 500
+            && controller.getShow().cue (Show::cueId (bank, slot)).isEmpty())
+        {
+            lastTapSlot = -1;
+            onChooseFile (Show::cueId (bank, slot));
+            return;
+        }
+        lastTapSlot = slot;
+        lastTapTime = now;
+    }
+    if (editMode && ! dragged && ! held && onTapInEditMode != nullptr && e.getDistanceFromDragStart() < 12)
+        if (const int slot = slotAt (e.getPosition()); slot >= 0)
+            onTapInEditMode (Show::cueId (bank, slot));
 }
 
 void CueGrid::showMenu (int id)
@@ -268,7 +316,7 @@ void CueGrid::showMenu (int id)
         colours.addColouredItem (100 + i, Look::cueColourName (i), Look::cueColour (i), true,
                                  cue.customColour == 0 && cue.colour == i);
     colours.addSeparator();
-    colours.addItem (4, "Custom colour...", true, cue.customColour != 0);
+    colours.addItem (4, "Custom color...", true, cue.customColour != 0);
     juce::PopupMenu m;
     m.addItem (1, empty ? "Choose file..." : "Replace file...");
     // Add to playlist: straight in when there is one, else a submenu (ids 1000 + playlist)
@@ -282,8 +330,12 @@ void CueGrid::showMenu (int id)
             add.addItem (1000 + pl, lists[(size_t) pl].displayName (pl));
         m.addSubMenu ("Add to playlist", add, ! empty);
     }
-    m.addSubMenu ("Colour", colours);
-    m.addItem (5, "Reset colour (Self Destruct)", cue.spent);
+    juce::PopupMenu schedule;
+    schedule.addItem (20, "At a time");
+    schedule.addItem (21, "After a delay");
+    m.addSubMenu ("Add to schedule", schedule, ! empty);
+    m.addSubMenu ("Color", colours);
+    m.addItem (5, "Reset color (Self Destruct)", cue.spent);
     m.addSeparator();
     // what a press does: play once and stop (default), or loop until pressed again / another button on its output / Stop all
     m.addItem (6, "Play once", ! empty, ! cue.loop);
@@ -302,6 +354,11 @@ void CueGrid::showMenu (int id)
             c.clearCue (id);
         else if (result >= 1000)
             c.addToPlaylist (result - 1000, id);
+        else if (result == 20 || result == 21)
+        {
+            if (safe->onAddToSchedule)
+                safe->onAddToSchedule (id, result == 20 ? ScheduleItem::clock : ScheduleItem::delay);
+        }
         else if (result == 5)
             c.resetColour (id);
         else if (result == 6 || result == 7)
@@ -324,12 +381,29 @@ void CueGrid::chooseFile (int id)
 {
     chooser = std::make_unique<juce::FileChooser> ("Choose an audio file", juce::File(), controller.getLoader().wildcards());
     juce::Component::SafePointer<CueGrid> safe (this);
+   #if JUCE_ANDROID
+    // Samsung DeX: Android's picker hands back a link; the song is copied into the show's Audio folder first
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                          [safe, id] (const juce::FileChooser& fc)
+    {
+        if (safe == nullptr || fc.getURLResult().isEmpty())
+            return;
+        AndroidFiles::copyIn ({ fc.getURLResult() }, safe->controller.getAudioFolder(), [safe, id] (const juce::Array<juce::File>& copies)
+        {
+            if (safe != nullptr && copies[0] != juce::File())
+                safe->controller.assignFile (id, copies[0]);
+            else if (safe != nullptr)
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Choose file", "Couldn't copy that file.");
+        });
+    });
+   #else
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                           [safe, id] (const juce::FileChooser& fc)
     {
         if (safe != nullptr && fc.getResult() != juce::File())
             safe->controller.assignFile (id, fc.getResult());
     });
+   #endif
 }
 
 void CueGrid::fileDragMove (const juce::StringArray&, int x, int y)

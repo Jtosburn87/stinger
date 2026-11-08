@@ -3,7 +3,7 @@
   "UUID": "com.stinger.streamdeck",
   "Name": "Stinger",
   "Author": "LEFTNoiseAudio",
-  "Description": "Play Stinger's buttons and playlist from Stream Deck: keys show each button's name and colour, light up while it plays and count down.",
+  "Description": "Play Stinger's buttons and playlist from Stream Deck: keys show each button's name and color, light up while it plays and count down.",
   "Version": "0.3.2.1",
   "SDKVersion": 2,
   "CodePath": "plugin.html",
@@ -85,8 +85,8 @@
     },
     {
       "UUID": "com.stinger.streamdeck.resetcolours",
-      "Name": "Reset colours",
-      "Tooltip": "Gives every black (Self Destruct) button its colour back",
+      "Name": "Reset colors",
+      "Tooltip": "Gives every black (Self Destruct) button its color back",
       "Icon": "images/action-resetcolours",
       "Controllers": ["Keypad"],
       "States": [{ "Image": "images/key-resetcolours", "ShowTitle": false }]

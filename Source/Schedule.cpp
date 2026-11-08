@@ -12,6 +12,8 @@ juce::var RunRow::toVar() const
 {
     auto* o = new juce::DynamicObject();
     o->setProperty ("cue", cueId);
+    if (playlist >= 0)
+        o->setProperty ("playlist", playlist);
     o->setProperty ("time", time);
     o->setProperty ("person", person);
     o->setProperty ("notes", notes);
@@ -22,6 +24,7 @@ RunRow RunRow::fromVar (const juce::var& v)
 {
     RunRow r;
     r.cueId = (int) v.getProperty ("cue", -1);
+    r.playlist = (int) v.getProperty ("playlist", -1);
     r.time = v.getProperty ("time", {}).toString();
     r.person = v.getProperty ("person", {}).toString();
     r.notes = v.getProperty ("notes", {}).toString();
@@ -132,7 +135,9 @@ void ShowController::runGo()
     if (index < 0)
         return;
     const auto row = show.run[(size_t) index];
-    if (show.isValid (row.cueId) && ! show.cue (row.cueId).isEmpty())
+    if (row.playlist >= 0)
+        go (row.playlist);
+    else if (show.isValid (row.cueId) && ! show.cue (row.cueId).isEmpty())
         play (row.cueId);
     autosaveNow = true;
     runOnAirUid = row.uid;
@@ -287,14 +292,6 @@ void ShowController::scheduleGoNow()
         fireItem (show.schedule[(size_t) i]);
 }
 
-void ShowController::fireItem (ScheduleItem& s)
-{
-    s.state = ScheduleItem::fired;
-    autosaveNow = true;
-    if (show.isValid (s.cueId) && ! show.cue (s.cueId).isEmpty() && ! engine.isCuePlaying (s.cueId))
-        play (s.cueId);
-    sendChangeMessage();
-}
 
 void ShowController::goPressed()
 {
@@ -356,5 +353,68 @@ juce::String ShowController::getRunName (int row) const
     if (row < 0 || row >= (int) show.run.size())
         return {};
     const auto& r = show.run[(size_t) row];
-    return r.person.isNotEmpty() ? r.person : show.isValid (r.cueId) ? show.cue (r.cueId).name : juce::String ("(note)");
+    if (r.person.isNotEmpty())
+        return r.person;
+    if (const auto* list = playlistAt (r.playlist))
+        return list->displayName (r.playlist);
+    return show.isValid (r.cueId) ? show.cue (r.cueId).name : juce::String ("(note)");
+}
+
+ScheduleItem ScheduleItem::make (int cueId, Kind kind, juce::Time now)
+{
+    ScheduleItem s;
+    s.cueId = cueId;
+    s.kind = kind;
+    s.secondsOfDay = (now.getHours() * 3600 + now.getMinutes() * 60 + 600) % 86400;
+    s.delaySeconds = 300.0;
+    return s;
+}
+
+int parseTimeOfDay (const juce::String& text, int nowSeconds)
+{
+    auto t = text.trim().toLowerCase();
+    const bool pm = t.endsWith ("pm") || t.endsWith ("p"), am = t.endsWith ("am") || t.endsWith ("a");
+    t = t.retainCharacters ("0123456789:");
+    const auto parts = juce::StringArray::fromTokens (t, ":", {});
+    if (parts.size() < 1 || parts.size() > 3 || t.isEmpty())
+        return -1;
+    int h = parts[0].getIntValue();
+    const int m = parts.size() > 1 ? parts[1].getIntValue() : 0, s = parts.size() > 2 ? parts[2].getIntValue() : 0;
+    if (pm && h < 12) h += 12;
+    if (am && h == 12) h = 0;
+    if (h > 23 || m > 59 || s > 59)
+        return -1;
+    auto seconds = h * 3600 + m * 60 + s;
+    if (! pm && ! am && h >= 1 && h < 12 && seconds < nowSeconds)
+        seconds += 12 * 3600;
+    return seconds;
+}
+
+void ShowController::fireItem (ScheduleItem& s)
+{
+    autosaveNow = true;
+    const bool playable = show.isValid (s.cueId) && ! show.cue (s.cueId).isEmpty() && getAudio (s.cueId) != nullptr;
+    s.state = playable ? ScheduleItem::fired : ScheduleItem::missed;   // nothing to play: it must not look as if it worked
+    if (playable && ! engine.isCuePlaying (s.cueId))
+        play (s.cueId);
+    sendChangeMessage();
+}
+
+juce::String maskTime (const juce::String& typed, bool delay)
+{
+    juce::String digits;
+    for (auto c : typed)
+    {
+        if (c < '0' || c > '9' || digits.length() == 4)
+            continue;
+        const int n = digits.length();
+        const bool fits = n == 2 ? c <= '5'
+                        : delay  ? true
+                        : n == 0 ? c <= '2'
+                        : n == 1 ? (digits[0] < '2' || c <= '3')
+                                 : true;
+        if (fits)
+            digits += juce::String::charToString (c);
+    }
+    return digits.length() > 2 ? digits.substring (0, 2) + ":" + digits.substring (2) : digits;
 }

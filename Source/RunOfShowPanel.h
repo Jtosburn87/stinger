@@ -4,6 +4,7 @@
 
 /** The run of show: who, what song, notes and time, in order, with its own Next and GO. */
 class RunOfShowPanel : public juce::Component,
+                       public juce::DragAndDropTarget,
                        private juce::TableListBoxModel,
                        private juce::ChangeListener
 {
@@ -12,6 +13,13 @@ public:
     ~RunOfShowPanel() override;
     void paint (juce::Graphics&) override;
     void resized() override;
+    void paintOverChildren (juce::Graphics&) override;
+
+    // a button dragged here from the grid (Edit mode, or Ctrl+drag) goes in where it's let go
+    bool isInterestedInDragSource (const SourceDetails&) override;
+    void itemDragMove (const SourceDetails&) override;
+    void itemDragExit (const SourceDetails&) override;
+    void itemDropped (const SourceDetails&) override;
 
 private:
     int getNumRows() override { return (int) controller.getShow().run.size(); }
@@ -21,6 +29,8 @@ private:
     void cellDoubleClicked (int row, int column, const juce::MouseEvent&) override;
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void addRow (int cueId);
+    int insertIndexAt (juce::Point<int> position) const;
+    int dropAt = -1;                    // where a drag would land, -1 = none
 
     ShowController& controller;
     std::function<int()> selectedButton;

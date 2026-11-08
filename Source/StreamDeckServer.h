@@ -22,7 +22,8 @@ public:
         juce::String page;                    // not empty: served for GET / (the remote's web page)
     };
 
-    explicit StreamDeckServer (ShowController& controller, int port = defaultPort, Options options = {});
+    explicit StreamDeckServer (ShowController& controller, int port = defaultPort);
+    StreamDeckServer (ShowController& controller, int port, Options options);
     ~StreamDeckServer() override;
 
     /** Does an action pressed on the Stream Deck (same ids as keys / MIDI). */

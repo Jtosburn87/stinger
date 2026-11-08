@@ -304,3 +304,123 @@ void CountdownPanel::resized()
     modeLabel.setBounds (row.removeFromLeft (90));
     mode.setBounds (row);
 }
+
+// ---------------------------------------------------------------------------------------------
+
+BigClock::BigClock (ShowController& c, juce::PropertiesFile& s) : controller (c), settings (s)
+{
+    use24Hour = settings.getBoolValue ("clock24Hour", true);
+    mode = (Mode) juce::jlimit (0, 2, settings.getIntValue ("clockMode", 0));
+    setTooltip ("Right-click to choose time of day or a countdown");
+    startTimerHz (4);
+}
+
+juce::String BigClock::timeText (juce::Time t, bool twentyFour)
+{
+    const auto two = [] (int n) { return juce::String (n).paddedLeft ('0', 2); };
+    const int hours = twentyFour ? t.getHours() : t.getHoursInAmPmFormat();
+    return (twentyFour ? two (hours) : juce::String (hours)) + ":" + two (t.getMinutes()) + ":" + two (t.getSeconds());
+}
+
+BigClock::Face BigClock::currentFace() const
+{
+    Face f;
+    if (mode == songLeft)
+    {
+        const auto playing = controller.newestVoice();
+        if (playing.any)
+        {
+            f.counting = true;
+            f.time = playing.looping ? juce::String ("LOOP") : durationText (std::ceil (playing.left));
+            f.caption = "TIME LEFT: " + playing.name;
+            f.colour = playing.looping ? Look::blue : playing.left <= 10.0 ? CountdownView::urgencyColour (ShowController::Urgency::red) : Look::text;
+            return f;
+        }
+    }
+    else if (mode == nextTrigger)
+    {
+        if (const int next = controller.getNextScheduled(); next >= 0)
+        {
+            f.counting = true;
+            f.time = durationText (std::ceil (controller.getScheduleRemaining()));
+            f.caption = "NEXT: " + controller.getScheduleName (next);
+            f.colour = CountdownView::urgencyColour (controller.getScheduleUrgency());
+            return f;
+        }
+    }
+    // the time of day, also when there's nothing to count down
+    f.time = timeText (juce::Time::getCurrentTime(), use24Hour);
+    f.caption = mode == timeOfDay ? juce::String() : juce::String ("TIME OF DAY");
+    f.colour = Look::text;
+    return f;
+}
+
+void BigClock::timerCallback()
+{
+    const auto face = currentFace();
+    const auto now = face.time + "|" + face.caption + "|" + face.colour.toString();
+    if (now != shown)
+    {
+        shown = now;
+        repaint();
+    }
+}
+
+void BigClock::mouseDown (const juce::MouseEvent& e)
+{
+    if (! e.mods.isPopupMenu())
+        return;
+    juce::PopupMenu m;
+    m.addSectionHeader ("Show");
+    m.addItem (1, "Time of day", true, mode == timeOfDay);
+    m.addItem (2, "Countdown: song time left", true, mode == songLeft);
+    m.addItem (3, "Countdown: next trigger", true, mode == nextTrigger);
+    m.addSeparator();
+    m.addItem (11, "24-hour time", true, use24Hour);
+    m.addItem (12, "12-hour time", true, ! use24Hour);
+    m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(),
+                     [safe = juce::Component::SafePointer<BigClock> (this)] (int result)
+    {
+        if (safe == nullptr || result == 0)
+            return;
+        if (result >= 11)
+        {
+            safe->use24Hour = result == 11;
+            safe->settings.setValue ("clock24Hour", safe->use24Hour);
+        }
+        else
+        {
+            safe->mode = (Mode) (result - 1);
+            safe->settings.setValue ("clockMode", (int) safe->mode);
+        }
+        safe->settings.saveIfNeeded();
+        safe->shown.clear();
+        safe->timerCallback();
+    });
+}
+
+void BigClock::paint (juce::Graphics& g)
+{
+    g.fillAll (Look::sidePanel);
+    g.setColour (Look::line);
+    g.fillRect (0, getHeight() - 1, getWidth(), 1);
+    g.fillRect (getWidth() - 1, 0, 1, getHeight());
+
+    const auto face = currentFace();
+    auto r = getLocalBounds().reduced (16, 5);
+    if (face.caption.isNotEmpty())
+    {
+        g.setColour (Look::textDim);
+        g.setFont (Look::condensed (14.0f));
+        g.drawFittedText (face.caption, r.removeFromTop (16), juce::Justification::centredLeft, 1, 0.75f);
+    }
+    if (! face.counting && ! use24Hour)
+    {
+        g.setColour (Look::textDim);
+        g.setFont (Look::condensed (20.0f));
+        g.drawText (juce::Time::getCurrentTime().getHours() < 12 ? "AM" : "PM", r.removeFromRight (34), juce::Justification::centredRight);
+    }
+    g.setColour (face.colour);
+    g.setFont (Look::mono (face.caption.isNotEmpty() ? 38.0f : 46.0f, true));
+    g.drawFittedText (face.time, r, juce::Justification::centredLeft, 1, 0.7f);
+}

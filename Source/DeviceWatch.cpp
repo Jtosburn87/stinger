@@ -12,7 +12,9 @@ DeviceWatch::DeviceWatch (ShowController& c)
     rememberMain();
     controller.resumeAfterRateChange = [this] { return state != State::normal; };
     manager.addChangeListener (this);
+   #if ! JUCE_ANDROID   // Android (Samsung DeX): see check()
     startTimerHz (4);
+   #endif
 }
 
 DeviceWatch::~DeviceWatch()
@@ -63,6 +65,11 @@ void DeviceWatch::setState (State s)
 
 void DeviceWatch::check()
 {
+   #if JUCE_ANDROID
+    // Android reroutes its own output (DeX taking HDMI, a USB interface plugged in or out), pausing the audio for a
+    // moment: that isn't a lost interface, and reopening the device then would only interrupt what's playing
+    return;
+   #endif
     if (switching)
         return;
     if (userChanging)

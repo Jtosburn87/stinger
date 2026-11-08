@@ -14,3 +14,12 @@ Thumbs.db
 
 # yt-dlp / ffmpeg (tools/fetch-tools.ps1 downloads them; the installer ships them)
 /tools/bin/
+
+# Android build output and the machine-specific SDK path
+/android/.gradle/
+/android/.kotlin/
+/android/build/
+/android/app/build/
+/android/app/.cxx/
+/android/local.properties
+/android/juce/

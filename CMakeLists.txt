@@ -51,6 +51,9 @@ add_library(StingerCore STATIC
     Source/Playlists.cpp
     Source/Controls.cpp
     Source/CueFx.cpp
+    Source/StockFx.cpp
+    Source/PeakLimiter.cpp
+    Source/MultibandLimiter.cpp
     Source/PluginHost.cpp
     Source/ShowPlugins.cpp
     Source/StreamDeckServer.cpp
@@ -61,8 +64,15 @@ if(WIN32)
     # WinRT MIDI: Bluetooth MIDI devices (footswitches, pads) show up once paired in Windows.
     target_compile_definitions(StingerCore PUBLIC JUCE_ASIO=1 JUCE_WASAPI=1 JUCE_USE_WINRT_MIDI=1)
 endif()
+# Android has no plugin format to host: buttons get the stock EQ and compressor instead (StockFx).
+if(ANDROID)
+    target_compile_definitions(StingerCore PUBLIC JUCE_PLUGINHOST_VST3=0)
+else()
+    target_compile_definitions(StingerCore PUBLIC
+        JUCE_PLUGINHOST_VST3=1
+        JUCE_MODAL_LOOPS_PERMITTED=1)   # the tests run the message loop for a while (Stream Deck connection)
+endif()
 target_compile_definitions(StingerCore PUBLIC
-    JUCE_PLUGINHOST_VST3=1
     JUCE_PLUGINHOST_AU=0
     JUCE_PLUGINHOST_LADSPA=0
     JUCE_PLUGINHOST_LV2=0
@@ -70,7 +80,6 @@ target_compile_definitions(StingerCore PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_USE_MP3AUDIOFORMAT=1
-    JUCE_MODAL_LOOPS_PERMITTED=1   # the tests run the message loop for a while (Stream Deck connection)
     JUCE_APPLICATION_NAME_STRING="Stinger"
     JUCE_APPLICATION_VERSION_STRING="${STINGER_VERSION_LABEL}")
 target_link_libraries(StingerCore
@@ -95,29 +104,56 @@ juce_add_gui_app(Stinger
     MICROPHONE_PERMISSION_TEXT "Stinger records from your audio interface inputs into a button."
     VERSION ${PROJECT_VERSION})
 
+# Shared by the desktop and Android apps.
 target_sources(Stinger PRIVATE
-    Source/Main.cpp
-    Source/MainComponent.cpp
     Source/CueGrid.cpp
     Source/NowPlaying.cpp
-    Source/CueSettings.cpp
     Source/PlaylistPanel.cpp
     Source/WaveformEditor.cpp
-    Source/FxPanel.cpp
-    Source/GlobalHotkeys.cpp
-    Source/ControlSurface.cpp
-    Source/ControlsWindow.cpp
-    Source/Look.cpp
-    Source/ImportPanel.cpp
-    Source/Remote.cpp
-    Source/ShowCheckPanel.cpp
-    Source/AudioPanel.cpp
-    Source/CountdownDisplay.cpp
-    Source/SchedulePanel.cpp
-    Source/RunOfShowPanel.cpp
-    Source/OscPanel.cpp
-    Source/BackupPanel.cpp
-    third_party/qrcodegen/qrcodegen.cpp)
+    Source/Look.cpp)
+
+if(ANDROID)
+    # Touch pages for the phone's own screen (see android/). JUCE's Java code loads the app by the name juce_jni.
+    target_sources(Stinger PRIVATE Source/MobileApp.cpp Source/MobilePages.cpp Source/DexBridge.cpp Source/StockFxEditor.cpp Source/AndroidFiles.cpp Source/DexDeck.cpp)
+    # Samsung DeX: the computer app's screens, on the monitor. Android only: the computer build below is untouched.
+    target_sources(Stinger PRIVATE
+        Source/MainComponent.cpp
+        Source/CueSettings.cpp
+        Source/FxPanel.cpp
+        Source/GlobalHotkeys.cpp
+        Source/ControlSurface.cpp
+        Source/ControlsWindow.cpp
+        Source/ImportPanel.cpp
+        Source/Remote.cpp
+        Source/ShowCheckPanel.cpp
+        Source/AudioPanel.cpp
+        Source/CountdownDisplay.cpp
+        Source/SchedulePanel.cpp
+        Source/RunOfShowPanel.cpp
+        Source/OscPanel.cpp
+        Source/BackupPanel.cpp
+        third_party/qrcodegen/qrcodegen.cpp)
+    set_target_properties(Stinger PROPERTIES OUTPUT_NAME juce_jni)
+else()
+    target_sources(Stinger PRIVATE
+        Source/Main.cpp
+        Source/MainComponent.cpp
+        Source/CueSettings.cpp
+        Source/FxPanel.cpp
+        Source/GlobalHotkeys.cpp
+        Source/ControlSurface.cpp
+        Source/ControlsWindow.cpp
+        Source/ImportPanel.cpp
+        Source/Remote.cpp
+        Source/ShowCheckPanel.cpp
+        Source/AudioPanel.cpp
+        Source/CountdownDisplay.cpp
+        Source/SchedulePanel.cpp
+        Source/RunOfShowPanel.cpp
+        Source/OscPanel.cpp
+        Source/BackupPanel.cpp
+        third_party/qrcodegen/qrcodegen.cpp)
+endif()
 
 # The Wi-Fi remote's web page, served by Stinger itself.
 juce_add_binary_data(StingerRemoteData SOURCES remote/remote.html)
@@ -129,12 +165,14 @@ target_link_libraries(Stinger PRIVATE
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags)
 
-# Engine tests: synthetic audio through the engine, no audio device needed.
-add_executable(EngineTests Tests/EngineTests.cpp)
-target_link_libraries(EngineTests PRIVATE
-    StingerCore
-    juce::juce_recommended_config_flags
-    juce::juce_recommended_warning_flags)
+# Engine tests: synthetic audio through the engine, no audio device needed. (On the PC, not on Android.)
+if(NOT ANDROID)
+    add_executable(EngineTests Tests/EngineTests.cpp)
+    target_link_libraries(EngineTests PRIVATE
+        StingerCore
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags)
+endif()
 
 if(APPLE)
     target_link_libraries(Stinger PRIVATE "-framework Carbon")   # global hotkeys (RegisterEventHotKey)

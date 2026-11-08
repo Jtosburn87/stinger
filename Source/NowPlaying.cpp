@@ -16,6 +16,14 @@ NowPlaying::NowPlaying (ShowController& c) : controller (c)
     startTimerHz (30);
 }
 
+void NowPlaying::setAllButtonsShown (bool shown)
+{
+    allButtonsShown = shown;
+    fadeAll.setVisible (shown);
+    stopAll.setVisible (shown);
+    repaint();
+}
+
 void NowPlaying::resized()
 {
     auto r = getLocalBounds().reduced (12).removeFromBottom (52);
@@ -57,7 +65,7 @@ void NowPlaying::paint (juce::Graphics& g)
     g.drawText ("NOW PLAYING", r.removeFromTop (24), juce::Justification::centredLeft);
     r.removeFromTop (8);
 
-    auto bottom = r.removeFromBottom (52 + 12);
+    auto bottom = r.removeFromBottom (allButtonsShown ? 52 + 12 : 0);
     juce::ignoreUnused (bottom);
 
     // output meters

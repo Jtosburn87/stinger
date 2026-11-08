@@ -77,7 +77,9 @@ ControlsPanel::ControlsPanel (ControlSurface& s, StreamDeckServer* deck) : surfa
 {
     global.setWantsKeyboardFocus (false);
     global.onClick = [this] { surface.setGlobal (global.getToggleState()); };
+   #if ! JUCE_ANDROID   // Android (Samsung DeX): no global keys, and no Stream Deck (it plugs into a computer)
     addAndMakeVisible (global);
+   #endif
 
     for (auto* l : { &refused, &inputs, &lastMidi, &deckStatus })
     {
@@ -85,6 +87,10 @@ ControlsPanel::ControlsPanel (ControlSurface& s, StreamDeckServer* deck) : surfa
         l->setFont (Look::font (13.0f));
         addAndMakeVisible (l);
     }
+   #if JUCE_ANDROID
+    refused.setVisible (false);
+    deckStatus.setVisible (false);
+   #endif
     refused.setColour (juce::Label::textColourId, juce::Colour (0xffe5484d));
 
     feedbackLabel.setColour (juce::Label::textColourId, Look::textDim);
@@ -103,7 +109,7 @@ ControlsPanel::ControlsPanel (ControlSurface& s, StreamDeckServer* deck) : surfa
         sl->setSliderStyle (juce::Slider::LinearBar);
         sl->setRange (0, 127, 1);
         sl->setWantsKeyboardFocus (false);
-        sl->setTooltip ("Velocity / value sent to a pad in this state (what colour it lights depends on the controller)");
+        sl->setTooltip ("Velocity / value sent to a pad in this state (what color it lights depends on the controller)");
         sl->onValueChange = [this]
         {
             ControlSurface::FeedbackLevels l;
@@ -161,7 +167,12 @@ void ControlsPanel::refresh()
                      juce::dontSendNotification);
 
     const auto names = surface.getInputNames();
-    inputs.setText (names.isEmpty() ? juce::String ("MIDI in: no devices found (pair Bluetooth MIDI in Windows Settings first)")
+   #if JUCE_ANDROID
+    const juce::String noMidi ("MIDI in: no devices found (plug in a USB MIDI device, or pair Bluetooth MIDI in Android's Settings first)");
+   #else
+    const juce::String noMidi ("MIDI in: no devices found (pair Bluetooth MIDI in Windows Settings first)");
+   #endif
+    inputs.setText (names.isEmpty() ? noMidi
                                     : "MIDI in, listening to all: " + names.joinIntoString (", "),
                     juce::dontSendNotification);
 
@@ -210,12 +221,17 @@ void ControlsPanel::paint (juce::Graphics& g)
 void ControlsPanel::resized()
 {
     auto r = getLocalBounds().reduced (16, 12);
+   #if JUCE_ANDROID
+    inputs.setBounds (r.removeFromTop (22));
+    lastMidi.setBounds (r.removeFromTop (22));
+   #else
     global.setBounds (r.removeFromTop (26));
     refused.setBounds (r.removeFromTop (refused.getText().isEmpty() ? 0 : 22));
     r.removeFromTop (6);
     inputs.setBounds (r.removeFromTop (22));
     lastMidi.setBounds (r.removeFromTop (22));
     deckStatus.setBounds (r.removeFromTop (22));
+   #endif
     r.removeFromTop (6);
     auto fb = r.removeFromTop (28);
     feedbackLabel.setBounds (fb.removeFromLeft (120));

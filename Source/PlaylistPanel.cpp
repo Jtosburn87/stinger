@@ -642,6 +642,19 @@ public:
             panel.showMenu (index(), nullptr);
     }
 
+    /** Dragging the title takes the playlist along, onto the Run of Show window. */
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (e.getMouseDownY() > 32 || e.getDistanceFromDragStart() < 6)
+            return;
+        if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor (this); container != nullptr && ! container->isDragAndDropActive())
+        {
+            auto image = createComponentSnapshot (getLocalBounds().withHeight (36)).convertedToFormat (juce::Image::ARGB);
+            image.multiplyAllAlphas (0.7f);
+            container->startDragging ("playlist:" + juce::String (index()), this, juce::ScaledImage (image), true);
+        }
+    }
+
     void mouseDoubleClick (const juce::MouseEvent&) override { panel.openWindow (index()); }
 
     bool isInterestedInDragSource (const SourceDetails& d) override { return d.description.toString().startsWith ("cue:"); }

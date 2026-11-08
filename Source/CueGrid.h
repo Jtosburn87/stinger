@@ -22,9 +22,27 @@ public:
     void setEditMode (bool on) { editMode = on; repaint(); }
     bool isEditMode() const { return editMode; }
 
+    /** Touch screens: buttons per row, how many of the bank's buttons to show (the first ones), and no key labels. */
+    void setShape (int buttonsPerRow, int buttonsShown, bool showKeyLabels)
+    {
+        columns = buttonsPerRow;
+        numShown = buttonsShown;
+        showKeys = showKeyLabels;
+        repaint();
+    }
+    /** A tap in edit mode that wasn't a drag (the Android app opens the editor page). */
+    std::function<void (int id)> onTapInEditMode;
+    /** A finger held still on a button with a song on it, in edit mode. Moving first makes it a drag instead. */
+    std::function<void (int id)> onHoldInEditMode;
+    /** A double-tap on an empty button, instead of the desktop file chooser (Android's hands back links, not files).
+        The grid times the two taps itself: a touch screen's taps don't always count as a double-click. */
+    std::function<void (int id)> onChooseFile;
+
     int getSelected() const { return selected; }
     void select (int id);
     std::function<void (int id)> onSelect;
+    /** Right-click, Add to schedule. */
+    std::function<void (int id, ScheduleItem::Kind kind)> onAddToSchedule;
 
     /** The key that plays a slot when the cue has no hotkey of its own: rows 1-6, Q-Y, A-H, Z-N. */
     static juce::KeyPress defaultKey (int slot);
@@ -44,6 +62,7 @@ public:
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;   // empty button: choose a file
     void mouseDrag (const juce::MouseEvent&) override;   // edit mode (or Ctrl): drag a button into a playlist
+    void mouseUp (const juce::MouseEvent&) override;
 
     bool isInterestedInFileDrag (const juce::StringArray&) override { return true; }
     void fileDragMove (const juce::StringArray&, int x, int y) override;
@@ -63,6 +82,7 @@ private:
     int slotAt (juce::Point<int> p) const;
     void paintSlot (juce::Graphics&, int slot);
     void showMenu (int id);
+    void startHold (int id);
     void changeListenerCallback (juce::ChangeBroadcaster*) override { repaint(); }
     void timerCallback() override;
 
@@ -71,5 +91,12 @@ private:
     int selected = 0;
     int dropSlot = -1;
     bool editMode = false;
+    int columns = Show::columns, numShown = Show::cuesPerBank;
+    int lastTapSlot = -1;
+    juce::uint32 lastTapTime = 0;
+    bool showKeys = true;
+    bool dragged = false;
+    juce::uint32 holdNumber = 0;   // a waiting hold only counts if this hasn't moved on
+    bool held = false;             // this press became a hold: the finger coming off does nothing
     std::unique_ptr<juce::FileChooser> chooser;
 };

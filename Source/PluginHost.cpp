@@ -1,4 +1,5 @@
 #include "PluginHost.h"
+#include "StockFx.h"
 
 namespace
 {
@@ -6,7 +7,11 @@ namespace
 
     void addFormats (juce::AudioPluginFormatManager& fm)
     {
+       #if JUCE_PLUGINHOST_VST3
         fm.addFormat (new juce::VST3PluginFormat());
+       #else
+        juce::ignoreUnused (fm);
+       #endif
     }
 
     /** Scans one plugin file in a separate process, so a crashing plugin can't take Stinger down. */
@@ -81,6 +86,8 @@ juce::Array<juce::PluginDescription> PluginHost::effects() const
 std::unique_ptr<juce::AudioPluginInstance> PluginHost::create (const juce::PluginDescription& d, double sampleRate, int blockSize,
                                                                juce::String& error)
 {
+    if (StockFx::isStock (d))
+        return StockFx::create (d);
     return formats.createPluginInstance (d, sampleRate, blockSize, error);
 }
 

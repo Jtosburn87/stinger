@@ -18,15 +18,64 @@ namespace
                 if (row < 0 || row >= (int) rows.size())
                     return;
                 auto r = rows[(size_t) row];
-                (column == timeColumn ? r.time : column == personColumn ? r.person : r.notes) = getText();
+                if (column == timeColumn)
+                {
+                    // strict: four digits or nothing at all; anything unfinished puts the old time back
+                    const auto typed = getText();
+                    if (typed.isEmpty())
+                        r.time.clear();
+                    else
+                    {
+                        const auto now = juce::Time::getCurrentTime();
+                        const int t = typed.length() == 5 ? parseTimeOfDay (typed, now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) : -1;
+                        if (t >= 0)
+                            r.time = timeOfDayText (t);
+                    }
+                }
+                else
+                    (column == personColumn ? r.person : r.notes) = getText();
                 controller.setRunRow (row, r);
+                show (row);
             };
         }
+
+        juce::TextEditor* createEditorComponent() override
+        {
+            auto* editor = juce::Label::createEditorComponent();
+            if (column == timeColumn)
+            {
+                editor->setInputRestrictions (5, "0123456789");
+                editor->setKeyboardType (juce::TextInputTarget::numericKeyboard);
+            }
+            return editor;
+        }
+
+        void editorShown (juce::TextEditor* editor) override
+        {
+            if (column != timeColumn)
+                return;
+            editor->setText (maskTime (getText(), false), false);
+            editor->selectAll();
+            editor->onTextChange = [editor]
+            {
+                const auto masked = maskTime (editor->getText(), false);
+                if (masked != editor->getText())
+                {
+                    editor->setText (masked, false);
+                    editor->moveCaretToEnd();
+                }
+            };
+        }
+
         void show (int index)
         {
             row = index;
+            if (isBeingEdited())
+                return;
             const auto& r = controller.getShow().run[(size_t) index];
             setText (column == timeColumn ? r.time : column == personColumn ? r.person : r.notes, juce::dontSendNotification);
+            if (column == timeColumn)
+                setTooltip ("Hours and minutes, four digits: 1905 for 19:05. This is for reading: it doesn't start anything by itself.");
         }
         ShowController& controller;
         const int column;
@@ -46,7 +95,8 @@ namespace
                     if (row >= 0 && row < (int) rows.size())
                     {
                         auto r = rows[(size_t) row];
-                        r.cueId = id;
+                        r.cueId = id >= 0 ? id : -1;
+                        r.playlist = id <= -2 ? -2 - id : -1;
                         controller.setRunRow (row, r);
                     }
                 });
@@ -56,7 +106,13 @@ namespace
         {
             row = index;
             const auto& show = controller.getShow();
-            const int id = show.run[(size_t) index].cueId;
+            const auto& rowData = show.run[(size_t) index];
+            if (rowData.playlist >= 0 && rowData.playlist < (int) show.playlists.size())
+            {
+                setButtonText ("Playlist: " + show.playlists[(size_t) rowData.playlist].displayName (rowData.playlist));
+                return;
+            }
+            const int id = rowData.cueId;
             setButtonText (id < 0 ? juce::String ("(note)") : show.isValid (id) && ! show.cue (id).isEmpty() ? show.cue (id).name : juce::String ("(empty button)"));
         }
         ShowController& controller;
@@ -82,7 +138,7 @@ RunOfShowPanel::RunOfShowPanel (ShowController& c, std::function<int()> selected
     go.getProperties().set ("big", true);
     go.setTooltip ("Play the Next row and move on (a note just moves on)");
     go.onClick = [this] { controller.runGo(); };
-    addSong.setTooltip ("A new row with the button selected in the main window");
+    addSong.setTooltip ("A new row with the button selected in the main window. You can also drag buttons here (Edit mode, or Ctrl+drag), or a playlist by its title.");
     addSong.onClick = [this] { addRow (selectedButton ? selectedButton() : -1); };
     addNote.setTooltip ("A row with no audio, like a speech");
     addNote.onClick = [this] { addRow (-1); };
@@ -216,5 +272,60 @@ RunOfShowWindow::RunOfShowWindow (ShowController& controller, std::function<int(
     setResizable (true, false);
     setResizeLimits (860, 300, 3000, 2000);
     setWantsKeyboardFocus (true);
+    setAlwaysOnTop (true);   // stays in view while the main window is used
     centreWithSize (getWidth(), getHeight());
+}
+
+int RunOfShowPanel::insertIndexAt (juce::Point<int> position) const
+{
+    const auto inTable = table.getLocalPoint (this, position);
+    const int row = table.getRowContainingPosition (inTable.x, inTable.y);
+    if (row < 0)
+        return controller.getShow().run.empty() || inTable.y > table.getHeaderHeight() ? (int) controller.getShow().run.size() : 0;
+    const auto bounds = table.getRowPosition (row, true);
+    return inTable.y > bounds.getCentreY() ? row + 1 : row;
+}
+
+bool RunOfShowPanel::isInterestedInDragSource (const SourceDetails& d)
+{
+    return d.description.toString().startsWith ("cue:") || d.description.toString().startsWith ("playlist:");
+}
+
+void RunOfShowPanel::itemDragMove (const SourceDetails& d)
+{
+    dropAt = insertIndexAt (d.localPosition);
+    repaint();
+}
+
+void RunOfShowPanel::itemDragExit (const SourceDetails&)
+{
+    dropAt = -1;
+    repaint();
+}
+
+void RunOfShowPanel::itemDropped (const SourceDetails& d)
+{
+    RunRow r;
+    const auto what = d.description.toString();
+    if (what.startsWith ("playlist:"))
+        r.playlist = what.fromFirstOccurrenceOf ("playlist:", false, false).getIntValue();
+    else
+        r.cueId = what.fromFirstOccurrenceOf ("cue:", false, false).getIntValue();
+    const int at = controller.addRunRow (r, insertIndexAt (d.localPosition));
+    dropAt = -1;
+    table.updateContent();
+    table.selectRow (at);
+    repaint();
+}
+
+void RunOfShowPanel::paintOverChildren (juce::Graphics& g)
+{
+    if (dropAt < 0)
+        return;
+    const int rows = getNumRows();
+    const int rowHeight = table.getRowHeight();
+    const int y = table.getY() + table.getHeaderHeight() + std::min (dropAt, rows) * rowHeight
+                - (table.getViewport() != nullptr ? table.getViewport()->getViewPositionY() : 0);
+    g.setColour (Look::amber);
+    g.fillRect (table.getX(), juce::jlimit (table.getY(), table.getBottom() - 3, y - 1), table.getWidth(), 3);
 }

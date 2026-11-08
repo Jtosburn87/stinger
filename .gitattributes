@@ -2,3 +2,4 @@
 *.sh text eol=lf
 *.yml text eol=lf
 *.png binary
+android/gradlew text eol=lf

@@ -1,4 +1,7 @@
 #include "Downloader.h"
+#if JUCE_ANDROID
+ #include <juce_audio_formats/juce_audio_formats.h>   // checks a downloaded file is playable (no ffmpeg on Android)
+#endif
 
 #if JUCE_WINDOWS
  static constexpr bool isWindows = true;
@@ -163,10 +166,10 @@ void Downloader::cancel (int id)
             if (j.state == State::queued)
             {
                 j.state = State::cancelled;
-                j.status = "Cancelled";
+                j.status = "Canceled";
             }
             else
-                j.status = "Cancelling...";
+                j.status = "Canceling...";
         }
     cancelled.insert (id);
     if (runningJob == id && runningTool != nullptr)
@@ -276,12 +279,18 @@ bool Downloader::process (Job job)
         {
             const bool wasCancelled = cancelled.count (j.id) > 0;
             j.state = wasCancelled ? State::cancelled : State::failed;
-            j.status = wasCancelled ? juce::String ("Cancelled") : error;
+            j.status = wasCancelled ? juce::String ("Canceled") : error;
         });
         return false;
     };
+   #if JUCE_ANDROID
+    // Android: no yt-dlp or ffmpeg (an app can't run them), so direct links only, kept as they arrive
+    if (directLink (job.url).isEmpty())
+        return fail ("YouTube and video sites need Stinger on a computer. Here: Dropbox, OneDrive, Google Drive or a link to an audio file.");
+   #else
     if (! toolsInstalled())
         return fail ("The download tools (yt-dlp, ffmpeg) aren't installed: install Stinger with its installer.");
+   #endif
 
     auto temp = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("Stinger download " + juce::String (id));
     temp.deleteRecursively();
@@ -291,9 +300,14 @@ bool Downloader::process (Job job)
     juce::File downloaded;
     juce::String title;
     const auto direct = directLink (job.url);
+   #if JUCE_ANDROID
+    bool fetched = fetchDirect (id, direct, temp, downloaded, title);
+    if (false)
+   #else
     bool fetched = direct.isNotEmpty() ? fetchDirect (id, direct, temp, downloaded, title)
                                        : fetchWithYtDlp (id, job.url, temp, downloaded, title);
     if (! fetched && direct.isNotEmpty() && ! isCancelled (id))
+   #endif
     {
         // the direct fetch failed: yt-dlp knows Dropbox, OneDrive and odd servers. If it fails too, show the first error.
         Job now;
@@ -314,12 +328,29 @@ bool Downloader::process (Job job)
         return fail (now.status.startsWith ("Downloading") || now.status == "Starting" ? juce::String ("Download failed") : now.status);
     }
     if (isCancelled (id))
-        return fail ("Cancelled");
+        return fail ("Canceled");
 
     if (title.isEmpty())
         title = downloaded.getFileNameWithoutExtension();
     if (! job.folder.createDirectory())
         return fail ("Couldn't make the folder " + job.folder.getFullPathName());
+
+   #if JUCE_ANDROID
+    {
+        // no ffmpeg: the file is kept as it is, if Stinger can play it (it's converted to the device's rate when it loads)
+        juce::AudioFormatManager formats;
+        formats.registerBasicFormats();
+        if (std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (downloaded)); reader == nullptr)
+            return fail ("That link isn't audio Stinger can play here (WAV, AIFF, FLAC, MP3 or OGG).");
+        const auto kept = job.folder.getChildFile (juce::File::createLegalFileName (title).trim() + downloaded.getFileExtension())
+                                    .getNonexistentSibling (true);
+        if (! downloaded.moveFileTo (kept) && ! downloaded.copyFileTo (kept))
+            return fail ("Couldn't save it in " + job.folder.getFullPathName());
+        update (id, [&kept, &title] (Job& j) { j.title = title; j.state = State::done; j.progress = 1.0; j.result = kept; j.status = "Done"; });
+        return true;
+    }
+   #endif
+
     const auto out = job.folder.getChildFile (juce::File::createLegalFileName (title).trim() + ".wav").getNonexistentSibling (true);
     update (id, [&title] (Job& j) { j.title = title; j.status = "Converting"; j.progress = 0.85; });
 

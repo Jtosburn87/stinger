@@ -307,6 +307,11 @@ void ShowController::clearCue (int id)
     retireFx (id);
     errors.erase (id);
     loading.erase (id);
+    // no blank rows: it comes off every playlist too
+    for (int pl = 0; pl < (int) show.playlists.size(); ++pl)
+        for (int i = (int) show.playlists[(size_t) pl].entries.size() - 1; i >= 0; --i)
+            if (show.playlists[(size_t) pl].entries[(size_t) i].cueId == id)
+                removeEntry (pl, i);
     dirty = true;
     sendChangeMessage();
 }
@@ -423,7 +428,7 @@ int ShowController::splitToNewButton (int id, juce::Range<double> section, const
 int ShowController::nextEmptyCue (int id) const
 {
     for (id = std::max (0, id); show.isValid (id); ++id)
-        if (show.cue (id).isEmpty())
+        if (Show::slotOf (id) < buttonsPerBank && show.cue (id).isEmpty())
             return id;
     return -1;
 }
@@ -887,6 +892,9 @@ std::vector<ShowIssue> ShowController::checkShow() const
     for (int i = 0; i < (int) show.run.size(); ++i)
         if (const int id = show.run[(size_t) i].cueId; id >= 0 && (! show.isValid (id) || show.cue (id).isEmpty()))
             add (ShowIssue::Kind::emptyEntry, id, "Run of show, row " + juce::String (i + 1) + ": its button is empty.");
+    for (int i = 0; i < (int) show.run.size(); ++i)
+        if (const auto* list = playlistAt (show.run[(size_t) i].playlist); list != nullptr && list->entries.empty())
+            add (ShowIssue::Kind::emptyEntry, -1, "Run of show, row " + juce::String (i + 1) + ": its playlist is empty.");
     for (int i = 0; i < (int) show.schedule.size(); ++i)
         if (const int id = show.schedule[(size_t) i].cueId; ! show.isValid (id) || show.cue (id).isEmpty())
             add (ShowIssue::Kind::emptyEntry, id, "Schedule, trigger " + juce::String (i + 1) + ": its button is empty.");

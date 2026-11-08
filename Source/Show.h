@@ -9,6 +9,14 @@
 #include <memory>
 #include <set>
 
+/** "19:05", "7:05 pm", "19:05:30" -> seconds of the day, -1 if it isn't a time. With no am / pm, a time like "1:05" that has
+    already gone by today means the afternoon one (nowSeconds = the time now). */
+int parseTimeOfDay (const juce::String& text, int nowSeconds = -1);
+
+/** What may be typed for a time: at most four digits, colon added after the second, and digits that couldn't make a real time
+    (hours 00-23 and minutes 00-59; a delay: minutes 00-99 and seconds 00-59) are left out. */
+juce::String maskTime (const juce::String& typed, bool delay);
+
 /** "5:00", "1:02:30". */
 juce::String durationText (double seconds);
 
@@ -43,6 +51,7 @@ struct RunRow
 {
     int cueId = -1;                 // the button GO plays, -1 = a note: GO just moves on
     juce::String time, person, notes;
+    int playlist = -1;              // or the playlist it presses GO on, -1 = none
     int uid = 0;                    // runtime only
 
     juce::var toVar() const;
@@ -68,6 +77,8 @@ struct ScheduleItem
 
     juce::var toVar() const;
     static ScheduleItem fromVar (const juce::var& v);
+    /** A new trigger for a button: ten minutes from now, or five minutes after START. */
+    static ScheduleItem make (int cueId, Kind kind, juce::Time now);
 };
 /** A show file: banks of buttons and playlists. Saved as JSON (*.stinger); audio files are referenced,
     never copied or changed. */
@@ -130,6 +141,9 @@ public:
     void restoreCue (int id, const Cue& c);
     /** Two buttons change places (everything goes with the song: settings, keys, plugins, playlist entries). */
     void swapCues (int a, int b);
+    /** Android can show fewer buttons per bank. The rest stay in the show but nothing new lands on them. */
+    void setButtonsPerBank (int count) { buttonsPerBank = juce::jlimit (1, Show::cuesPerBank, count); }
+    int getButtonsPerBank() const { return buttonsPerBank; }
     /** The first empty button at or after id (on through the later banks), -1 if none. */
     int nextEmptyCue (int id) const;
     /** Puts audio files onto empty buttons from startId on, in name order (natural: "2" before "10"),
@@ -388,6 +402,7 @@ private:
     juce::StringArray missingPlugins;
     double loadedRate = 0.0;
     juce::File showFile;
+    int buttonsPerBank = Show::cuesPerBank;
     juce::File homeFolder = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Stinger");
     void moveUnsavedAudio (const juce::File& audioFolder);
     std::set<int> destructing;   // buttons seen playing in Self Destruct mode: black once they stop

@@ -1,4 +1,7 @@
 #include "ImportPanel.h"
+#if JUCE_ANDROID
+ #include "AndroidFiles.h"
+#endif
 #include "CueSettings.h"
 #include "Look.h"
 
@@ -56,29 +59,53 @@ private:
                                   | juce::FileBrowserComponent::canSelectMultipleItems,
                               [safe] (const juce::FileChooser& fc)
         {
-            if (safe == nullptr || fc.getResults().isEmpty())
+           #if JUCE_ANDROID
+            // Samsung DeX: Android's picker hands back links; the songs are copied into the show's Audio folder first
+            if (safe == nullptr || fc.getURLResults().isEmpty())
                 return;
-            auto files = fc.getResults();
-            std::sort (files.begin(), files.end(), [] (const juce::File& a, const juce::File& b)
-                       { return a.getFileName().compareNatural (b.getFileName()) < 0; });
-            juce::StringArray where;
-            int missed = 0;
-            for (auto& f : files)
+            const int count = fc.getURLResults().size();
+            safe->result.setText ("Copying " + juce::String (count) + (count == 1 ? " file..." : " files..."), juce::dontSendNotification);
+            AndroidFiles::copyIn (fc.getURLResults(), safe->panel.controller.getAudioFolder(), [safe] (const juce::Array<juce::File>& copies)
             {
-                const int id = safe->panel.place (f, f.getFileNameWithoutExtension());
-                if (id >= 0)
-                    where.add (buttonName (id));
-                else
-                    ++missed;
-            }
-            juce::String text;
-            if (! where.isEmpty())
-                text << "Put " << where.size() << (where.size() == 1 ? " file" : " files") << " on "
-                     << (where.size() == 1 ? where[0] : where[0] + juce::String::fromUTF8 ("\xe2\x80\x93") + where[where.size() - 1]) << ".";
-            if (missed > 0)
-                text << " " << missed << " didn't fit: every button is in use.";
-            safe->result.setText (text, juce::dontSendNotification);
+                if (safe == nullptr)
+                    return;
+                juce::Array<juce::File> files;
+                for (auto& f : copies)
+                    if (f != juce::File())
+                        files.add (f);
+                safe->placeFiles (files, copies.size() - files.size());
+            });
+           #else
+            if (safe != nullptr && ! fc.getResults().isEmpty())
+                safe->placeFiles (fc.getResults(), 0);
+           #endif
         });
+    }
+
+    /** Puts the files on the empty buttons in name order, and says where they went. */
+    void placeFiles (juce::Array<juce::File> files, int notCopied)
+    {
+        std::sort (files.begin(), files.end(), [] (const juce::File& a, const juce::File& b)
+                   { return a.getFileName().compareNatural (b.getFileName()) < 0; });
+        juce::StringArray where;
+        int missed = 0;
+        for (auto& f : files)
+        {
+            const int id = panel.place (f, f.getFileNameWithoutExtension());
+            if (id >= 0)
+                where.add (buttonName (id));
+            else
+                ++missed;
+        }
+        juce::String text;
+        if (! where.isEmpty())
+            text << "Put " << where.size() << (where.size() == 1 ? " file" : " files") << " on "
+                 << (where.size() == 1 ? where[0] : where[0] + juce::String::fromUTF8 ("\xe2\x80\x93") + where[where.size() - 1]) << ".";
+        if (missed > 0)
+            text << " " << missed << " didn't fit: every button is in use.";
+        if (notCopied > 0)
+            text << " " << notCopied << " couldn't be copied.";   // Android only: a link the picker gave that couldn't be read
+        result.setText (text, juce::dontSendNotification);
     }
 
     ImportPanel& panel;
@@ -99,8 +126,13 @@ public:
     {
         paste.setMultiLine (true, false);
         paste.setReturnKeyStartsNewLine (true);
+       #if JUCE_ANDROID   // Samsung DeX: direct links only (Downloader)
+        paste.setTextToShowWhenEmpty ("Paste Dropbox, OneDrive, Google Drive or audio file links here (one per line), then Add",
+                                      Look::textFaint);
+       #else
         paste.setTextToShowWhenEmpty ("Paste YouTube, Dropbox or OneDrive links here (one per line), then Add",
                                       Look::textFaint);
+       #endif
         add.onClick = [this] { addLinks(); };
         all.onClick = [this] { downloadAll(); };
         clear.onClick = [this] { clearFinished(); };
@@ -112,11 +144,17 @@ public:
         list.setRowHeight (52);
         list.setColour (juce::ListBox::backgroundColourId, Look::ground);
         styleNote (note);
+       #if JUCE_ANDROID
+        note.setText ("YouTube and video sites need Stinger on a computer.", juce::dontSendNotification);
+        for (auto* c : std::initializer_list<juce::Component*> { &paste, &add, &all, &clear, &list, &note })
+            addAndMakeVisible (c);
+       #else
         if (! Downloader::toolsInstalled())
             note.setText ("The download tools (yt-dlp and ffmpeg) aren't installed. Install Stinger with its installer to use links.",
                           juce::dontSendNotification);
         for (auto* c : std::initializer_list<juce::Component*> { &paste, &add, &all, &clear, &update, &list, &note })
             addAndMakeVisible (c);
+       #endif
         startTimerHz (8);
     }
 
@@ -191,7 +229,11 @@ private:
                 const bool running = has && (job.state == Downloader::State::running || job.state == Downloader::State::queued);
                 action.setButtonText (! has ? "Download" : running ? "Cancel"
                                       : job.state == Downloader::State::done ? "Again" : "Retry");
+               #if JUCE_ANDROID
+                action.setEnabled (true);   // direct links need no tools
+               #else
                 action.setEnabled (Downloader::toolsInstalled());
+               #endif
                 remove.setEnabled (! running);
             }
             repaint();
@@ -383,7 +425,11 @@ ImportPanel::ImportPanel (ShowController& c, Downloader& d, std::function<int()>
     filesTab = std::make_unique<FilesTab> (*this);
     linksTab = std::make_unique<LinksTab> (*this);
     tabs.addTab ("Files", Look::panel, filesTab.get(), false);
+   #if JUCE_ANDROID
+    tabs.addTab ("Links", Look::panel, linksTab.get(), false);
+   #else
     tabs.addTab ("YouTube / links", Look::panel, linksTab.get(), false);
+   #endif
     tabs.setTabBarDepth (32);
     tabs.setOutline (0);
     addAndMakeVisible (tabs);

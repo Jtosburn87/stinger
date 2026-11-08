@@ -54,6 +54,9 @@ public:
     void resized() override;
     void paint (juce::Graphics&) override;
 
+    /** Touch screens: bigger controls, in rows that fit a narrow page. */
+    void setTouchLayout (bool on) { touchLayout = on; resized(); }
+
     /** Edit fields of a cue (what undo keeps). */
     struct Edits
     {
@@ -112,6 +115,8 @@ private:
         bool lit = false;   // a preview started by this button is playing
     };
     void updateEditButtons();
+    void layoutForTouch();
+    bool touchLayout = false;
     void addCut (juce::Range<double> range);
     void showHint (const juce::String& text);
 

@@ -1,4 +1,7 @@
 #include "ShowCheckPanel.h"
+#if JUCE_ANDROID
+ #include "AndroidFiles.h"
+#endif
 #include "Look.h"
 
 ShowCheckPanel::ShowCheckPanel (ShowController& c) : controller (c)
@@ -104,6 +107,23 @@ void ShowCheckPanel::findByHand (int row)
     const auto wanted = issues[(size_t) row].file;
     chooser = std::make_unique<juce::FileChooser> ("Where is " + wanted.getFileName() + "?",
                                                    juce::File::getSpecialLocation (juce::File::userMusicDirectory));
+   #if JUCE_ANDROID
+    // Samsung DeX: Android's picker hands back a link: the file is copied into the show's Audio folder and used from there
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                          [safe = juce::Component::SafePointer<ShowCheckPanel> (this), wanted] (const juce::FileChooser& fc)
+    {
+        if (safe == nullptr || fc.getURLResult().isEmpty())
+            return;
+        AndroidFiles::copyIn ({ fc.getURLResult() }, safe->controller.getAudioFolder(), [safe, wanted] (const juce::Array<juce::File>& copies)
+        {
+            if (safe == nullptr || copies[0] == juce::File())
+                return;
+            safe->controller.relinkFile (wanted, copies[0]);
+            safe->refresh();
+        });
+    });
+    return;
+   #endif
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                           [safe = juce::Component::SafePointer<ShowCheckPanel> (this), wanted] (const juce::FileChooser& fc)
     {

@@ -4,6 +4,9 @@ ControlSurface::ControlSurface (ShowController& c, juce::PropertiesFile& s) : co
 {
     commands.fromVar (juce::JSON::parse (settings.getValue ("commands")));
     global = settings.getBoolValue ("globalKeys", false);
+   #if JUCE_ANDROID
+    global = false;   // Android (Samsung DeX) can't give an app keys from other apps
+   #endif
     levels.playing = settings.getIntValue ("fbPlaying", 127);
     levels.next = settings.getIntValue ("fbNext", 64);
     levels.loaded = settings.getIntValue ("fbLoaded", 0);
@@ -123,6 +126,9 @@ bool ControlSurface::handleKey (const juce::KeyPress& key)
 
 void ControlSurface::setGlobal (bool on)
 {
+   #if JUCE_ANDROID
+    on = false;   // see the constructor
+   #endif
     global = on;
     save();
     updateGlobalKeys();
@@ -132,7 +138,7 @@ void ControlSurface::setGlobal (bool on)
 void ControlSurface::updateGlobalKeys()
 {
     juce::Array<juce::KeyPress> keys;
-    if (global)
+    if (global && ! typing)   // registered keys reach Stinger before any text box does: a 1 typed would play button 1
     {
         for (auto& [id, b] : commands.bindings)
             if (b.key.isNotEmpty())
@@ -352,5 +358,10 @@ void ControlSurface::timerCallback()
 {
     if (++ticks % 40 == 0)   // every 2 s: new / gone MIDI devices
         refreshInputs();
+    if (const auto* text = dynamic_cast<juce::TextEditor*> (juce::Component::getCurrentlyFocusedComponent()); (text != nullptr && ! text->isReadOnly()) != typing)
+    {
+        typing = ! typing;
+        updateGlobalKeys();
+    }
     sendFeedback();
 }

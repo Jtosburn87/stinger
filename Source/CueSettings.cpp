@@ -25,7 +25,7 @@ CueSettings::CueSettings (ShowController& c) : controller (c), waveform (c), fxP
     addAndMakeVisible (keyText);
 
     colourButton.setWantsKeyboardFocus (false);
-    colourButton.setTooltip ("The button's colour (also on the Stream Deck)");
+    colourButton.setTooltip ("The button's color (also on the Stream Deck)");
     colourButton.onClick = [this] { Look::showColourMenu (colourButton, controller, cueId); };
     addAndMakeVisible (colourButton);
     loudnessButton.setWantsKeyboardFocus (false);
@@ -136,8 +136,13 @@ CueSettings::CueSettings (ShowController& c) : controller (c), waveform (c), fxP
     fillInputs();
 
     linkLabel.setColour (juce::Label::textColourId, Look::textDim);
+   #if JUCE_ANDROID   // Samsung DeX: direct links only, kept as they are (Downloader)
+    linkText.setTextToShowWhenEmpty ("Paste a Dropbox, OneDrive, Google Drive or audio file link", Look::textFaint);
+    linkText.setTooltip ("A link to a song: Pull WAV downloads it and puts it on this button");
+   #else
     linkText.setTextToShowWhenEmpty ("Paste a YouTube, Dropbox or OneDrive link", Look::textFaint);
     linkText.setTooltip ("A link to a song: Pull WAV downloads it as a 24-bit WAV at the device's sample rate and puts it on this button");
+   #endif
     linkText.onReturnKey = [this] { pullOrCancel(); };
     pullButton.setWantsKeyboardFocus (false);
     pullButton.setTooltip ("Download the link into this button");

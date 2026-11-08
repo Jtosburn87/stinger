@@ -10,6 +10,7 @@
 #include "Loudness.h"
 #include "OscBridge.h"
 #include "BackupLink.h"
+#include "StockFx.h"
 #include <cstdio>
 
 namespace
@@ -934,6 +935,7 @@ static void testRunOfShow()
     check (sc.getRunOnAir() == 2, "GO past the end does nothing");
     sc.setRunNext (1);
     check (sc.getRunNext() == 1, "Next can be set by hand");
+    { const int at = sc.addRunRow ({ 1, {}, "Dropped", {} }, 1); check (at == 1 && show.run[1].person == "Dropped" && sc.getRunNext() == 2, "a row dropped in the middle lands there; Next stays on its row"); sc.removeRunRow (1); }
     sc.moveRunRow (2, 0);
     check (show.run[0].person == "Award winner" && sc.getRunNext() == 2, "Next stays on its row when rows move");
     sc.swapCues (0, 1);
@@ -950,6 +952,12 @@ static void testRunOfShow()
 static void testSchedule()
 {
     std::puts ("Schedule");
+    {
+        const auto a = ScheduleItem::make (4, ScheduleItem::clock, juce::Time (2026, 10, 6, 19, 0, 0, 0, true));
+        check (a.cueId == 4 && a.kind == ScheduleItem::clock && a.secondsOfDay == 19 * 3600 + 600, "a new trigger: ten minutes from now");
+        const auto b = ScheduleItem::make (4, ScheduleItem::delay, juce::Time (2026, 10, 6, 23, 55, 0, 0, true));
+        check (b.kind == ScheduleItem::delay && near ((float) b.delaySeconds, 300.0f) && b.secondsOfDay == 300, "five minutes after START; a time past midnight wraps");
+    }
     PlaybackEngine e;
     e.prepareForTest (rate, 2);
     Outputs out (2);
@@ -1367,6 +1375,94 @@ static void testScheduleOnRemotes()
     check (state()["run"]["next"] == "Walk-in", "or by song if no person is named");
 }
 
+static void testScheduleRealTime()
+{
+    std::puts ("Schedule on the real clock");
+    check (parseTimeOfDay ("19:05") == 19 * 3600 + 300 && parseTimeOfDay ("7:05 pm") == 19 * 3600 + 300 && parseTimeOfDay ("12:30 am") == 1800, "times are read");
+    const int nearNoon = 11 * 3600 + 50 * 60;
+    check (parseTimeOfDay ("1:05", nearNoon) == 13 * 3600 + 300, "at 11:50, 1:05 means this afternoon");
+    check (parseTimeOfDay ("11:55", nearNoon) == 11 * 3600 + 55 * 60, "11:55 is still this morning");
+    check (parseTimeOfDay ("01:05", nearNoon) == 13 * 3600 + 300, "and so does 01:05");
+    check (parseTimeOfDay ("13:05", nearNoon) == 13 * 3600 + 300 && parseTimeOfDay ("12:30", nearNoon) == 45000, "24-hour times are taken as written");
+    check (maskTime ("1", false) == "1" && maskTime ("12", false) == "12" && maskTime ("120", false) == "12:0" && maskTime ("1205", false) == "12:05", "the colon goes in by itself");
+    check (maskTime ("12:05", false) == "12:05" && maskTime ("12:0", false) == "12:0" && maskTime ("12:", false) == "12", "typed over or backspaced, it stays right");
+    check (maskTime ("1205999", false) == "12:05", "never more than four digits");
+    check (maskTime ("a1b2c0d5", false) == "12:05" && maskTime ("12 pm", false) == "12", "letters and spaces stay out");
+    check (maskTime ("3", false).isEmpty() && maskTime ("24", false) == "2" && maskTime ("1260", false) == "12:0", "hours over 23 and minutes over 59 can't be typed");
+    check (maskTime ("9959", true) == "99:59" && maskTime ("0160", true) == "01:0", "a delay: up to 99 minutes, seconds under 60");
+    check (parseTimeOfDay ("nonsense") < 0 && parseTimeOfDay ("25:00") < 0, "anything else isn't a time");
+
+    auto e = std::make_unique<PlaybackEngine>();
+    e->prepareForTest (rate, 2);
+    auto out = std::make_unique<Outputs> (2);
+    ShowController sc (*e);                 // the real timer and the real clock, nothing driven by hand
+    auto& show = sc.getShow();
+    for (int i = 0; i < 2; ++i)
+    {
+        show.cue (i) = monoOut (0);
+        show.cue (i).file = juce::File::getCurrentWorkingDirectory().getChildFile ("real" + juce::String (i) + ".wav");
+        sc.setAudioForTest (i, constant (1, 10.0, 0.2f));
+    }
+    show.playbackMode = PlaybackMode::overlap;
+    auto pump = [&] (std::function<bool()> done, int ms)
+    {
+        for (int waited = 0; waited < ms && ! done(); waited += 10)
+        {
+            out->run (*e);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (10);
+        }
+        return done();
+    };
+
+    sc.addScheduleItem (ScheduleItem::make (0, ScheduleItem::delay, juce::Time::getCurrentTime()));
+    show.schedule[0].delaySeconds = 0.5;
+    auto clock = ScheduleItem::make (1, ScheduleItem::clock, juce::Time::getCurrentTime());
+    const auto soon = juce::Time::getCurrentTime() + juce::RelativeTime::seconds (2.0);
+    clock.secondsOfDay = soon.getHours() * 3600 + soon.getMinutes() * 60 + soon.getSeconds();
+    sc.addScheduleItem (clock);
+    pump ([] { return false; }, 900);
+    check (! e->isCuePlaying (0), "nothing plays before START");
+    sc.startSchedule();
+    check (pump ([&] { return e->isCuePlaying (0); }, 1500), "a delay trigger plays by itself");
+    check (pump ([&] { return e->isCuePlaying (1); }, 4000), "a clock time plays by itself");
+    check (show.schedule[0].state == ScheduleItem::fired && show.schedule[1].state == ScheduleItem::fired, "both marked as played");
+
+    // nothing to play must not look as if it worked
+    sc.stopSchedule();
+    e->stopAll (false);
+    out->run (*e, 2);
+    show.schedule.clear();
+    sc.addScheduleItem (ScheduleItem::make (9, ScheduleItem::delay, juce::Time::getCurrentTime()));
+    show.schedule[0].delaySeconds = 0.2;
+    sc.startSchedule();
+    pump ([&] { return show.schedule[0].state != ScheduleItem::waiting; }, 1500);
+    check (show.schedule[0].state == ScheduleItem::missed && sc.getMissedCount() == 1, "a trigger on an empty button shows as missed, not played");
+    sc.stopSchedule();
+
+    // the run of show presses GO on a playlist
+    sc.addToPlaylist (0, 0);
+    sc.addToPlaylist (0, 1);
+    const int added = sc.addPlaylist ("Second");
+    RunRow row;
+    row.playlist = 0;
+    row.person = {};
+    sc.addRunRow (row);
+    RunRow other;
+    other.playlist = added;
+    sc.addRunRow (other);
+    check (sc.getRunName (0) == "Playlist 1", "a playlist row goes by the playlist's name");
+    sc.runGo();
+    out->run (*e, 3);
+    check (e->isCuePlaying (0) && sc.getOnAirEntry (0) == 0 && sc.getRunNext() == 1, "GO on the row plays the playlist from its Next");
+    Show copy;
+    copy.fromVar (juce::JSON::parse (juce::JSON::toString (show.toVar())));
+    check (copy.run[0].playlist == 0 && copy.run[1].playlist == added, "saved in the show");
+    sc.removePlaylist (0);
+    check (show.run[0].playlist < 0 && show.run[1].playlist == 0, "removing a playlist: its row goes, later rows follow theirs");
+    e->stopAll (false);
+    out->run (*e, 2);
+}
+
 static void testAutosave()
 {
     std::puts ("Autosave and crash recovery");
@@ -1624,6 +1720,17 @@ static void testPlaylists()
         check (show.playlists[0].entries[1].transition == Transition::playNext && show.playlists[0].entries.back().transition == Transition::stop,
                "a song put in the middle plays next too");
         sc.removeEntry (0, 1);
+
+        const auto songs = show.playlists[0].entries.size();
+        const int other = sc.addPlaylist ("Other");
+        sc.addToPlaylist (0, 23, 0);
+        sc.addToPlaylist (0, 23, 2);
+        sc.addToPlaylist (other, 23);
+        check (show.playlists[0].entries.size() == songs + 2 && show.playlists[(size_t) other].entries.size() == 1, "one button twice in a list and once in another");
+        sc.clearCue (23);
+        check (show.playlists[0].entries.size() == songs && show.playlists[(size_t) other].entries.empty(), "clearing a button takes it off every playlist");
+        sc.removePlaylist (other);
+        sc.selectPlaylist (0);
     }
     sc.setTransition (0, 0, Transition::playNext, 0.0);
     sc.setTransition (0, 1, Transition::crossfade, 0.1);
@@ -2025,6 +2132,238 @@ namespace
             }
         }
     };
+}
+
+/** Level of a sine through an effect, dB of output over input, after it has settled. */
+static float gainAt (StockFx& fx, double frequency, float level = 0.1f)
+{
+    fx.prepareToPlay (rate, 512);
+    juce::AudioBuffer<float> buffer (2, 512);
+    juce::MidiBuffer midi;
+    double phase = 0.0;
+    double energyIn = 0.0, energyOut = 0.0;   // over about 5 s: whole cycles, even at 30 Hz
+    for (int b = 0; b < 600; ++b)
+    {
+        for (int i = 0; i < 512; ++i)
+        {
+            const auto s = level * (float) std::sin (phase);
+            phase += juce::MathConstants<double>::twoPi * frequency / rate;
+            buffer.setSample (0, i, s);
+            buffer.setSample (1, i, s);
+        }
+        const auto in = buffer.getRMSLevel (0, 0, 512);
+        fx.processBlock (buffer, midi);
+        const auto out = buffer.getRMSLevel (0, 0, 512);
+        if (b >= 100)   // settled
+        {
+            energyIn += (double) in * in;
+            energyOut += (double) out * out;
+        }
+    }
+    return (float) juce::Decibels::gainToDecibels (std::sqrt (energyOut / energyIn));
+}
+
+static void testStockFx()
+{
+    std::puts ("Stock EQ and compressor");
+    auto makeFx = [] (StockFx::Kind k) { return std::unique_ptr<StockFx> (dynamic_cast<StockFx*> (StockFx::create (k).release())); };
+
+    auto eq = makeFx (StockFx::Kind::eq);
+    check (near (gainAt (*eq, 1000.0), 0.0f, 0.05f), "flat EQ: no change");
+    eq->set (StockFx::eqMidGain, 6.0f);
+    check (near (gainAt (*eq, 1000.0), 6.0f, 0.1f), "mid +6 at its frequency: +6 dB");
+    check (std::abs (gainAt (*eq, 20000.0)) < 0.5f, "mid +6: the far top stays put");
+    eq->set (StockFx::eqMidGain, 0.0f);
+    eq->set (StockFx::eqLowGain, -12.0f);
+    std::printf ("  low shelf -12 at 30 Hz reads %.2f dB\n", gainAt (*eq, 30.0));
+    check (near (gainAt (*eq, 30.0), -12.0f, 0.5f), "low -12: the bottom drops 12 dB");
+    check (std::abs (gainAt (*eq, 5000.0)) < 0.5f, "low -12: the highs stay put");
+    eq->set (StockFx::eqLowGain, 0.0f);
+    eq->set (StockFx::eqHighGain, 9.0f);
+    check (near (gainAt (*eq, 18000.0), 9.0f, 0.5f), "high +9: the top rises 9 dB");
+    eq->set (StockFx::eqHighGain, 0.0f);
+    eq->set (StockFx::eqLowCut, 200.0f);
+    check (near (gainAt (*eq, 200.0), -3.0f, 0.2f), "low cut: -3 dB at its frequency");
+    check (gainAt (*eq, 50.0) < -20.0f, "low cut: 2 octaves down is well under");
+
+    auto comp = makeFx (StockFx::Kind::compressor);
+    comp->set (StockFx::compThreshold, -20.0f);
+    comp->set (StockFx::compRatio, 4.0f);
+    comp->set (StockFx::compAttack, 1.0f);
+    comp->set (StockFx::compRelease, 50.0f);
+    check (near (gainAt (*comp, 1000.0, 0.01f), 0.0f, 0.1f), "under the threshold: no change");
+    // a sine at 0 dB peak is 20 over: 4:1 takes off 15 dB
+    check (near (gainAt (*comp, 1000.0, 1.0f), -15.0f, 1.0f), "20 dB over at 4:1: 15 dB down");
+    check (near (comp->gainReductionDb(), 15.0f, 1.0f), "the reduction meter reads it");
+    comp->set (StockFx::compMakeup, 6.0f);
+    check (near (gainAt (*comp, 1000.0, 1.0f), -9.0f, 1.0f), "makeup adds back on top");
+
+    // the settings go through a save and back, and a description makes the same effect
+    juce::MemoryBlock state;
+    comp->getStateInformation (state);
+    auto again = makeFx (StockFx::Kind::compressor);
+    again->setStateInformation (state.getData(), (int) state.getSize());
+    check (near (again->get (StockFx::compMakeup), 6.0f) && near (again->get (StockFx::compThreshold), -20.0f), "settings survive a save");
+    const auto description = StockFx::describe (StockFx::Kind::eq);
+    auto made = StockFx::create (description);
+    check (StockFx::isStock (description) && made != nullptr && made->getName() == "Stinger EQ", "a description makes the effect");
+}
+
+/** Dev: EngineTests --limiter in.wav out.wav threshold ceiling release wide: the Limiter effect over a file (latency taken off). */
+static int renderLimiter (const juce::StringArray& args)
+{
+    if (args.size() < 7)
+        return 2;
+    juce::WavAudioFormat wav;
+    std::unique_ptr<juce::AudioFormatReader> reader (wav.createReaderFor (juce::File (args[1]).createInputStream().release(), true));
+    if (reader == nullptr)
+        return 3;
+    auto effect = StockFx::create (StockFx::Kind::limiter);
+    auto& fx = dynamic_cast<StockFx&> (*effect);
+    fx.set (StockFx::limitThreshold, args[3].getFloatValue());
+    fx.set (StockFx::limitOutput, args[4].getFloatValue());
+    fx.set (StockFx::limitRelease, args[5].getFloatValue());
+    fx.set (StockFx::limitWideBand, args[6].getFloatValue());
+    fx.prepareToPlay (reader->sampleRate, 512);
+
+    const int latency = fx.getLatencySamples(), length = (int) reader->lengthInSamples + latency;
+    juce::AudioBuffer<float> all (2, length);
+    all.clear();
+    reader->read (&all, 0, (int) reader->lengthInSamples, 0, true, true);
+    juce::MidiBuffer midi;
+    const auto started = juce::Time::getMillisecondCounterHiRes();
+    for (int pos = 0; pos < length; pos += 512)
+    {
+        const int n = std::min (512, length - pos);
+        juce::AudioBuffer<float> block (all.getArrayOfWritePointers(), 2, pos, n);
+        fx.processBlock (block, midi);
+    }
+    std::printf ("latency %d samples, %.1f x real time\n", latency, (length / reader->sampleRate) / ((juce::Time::getMillisecondCounterHiRes() - started) * 0.001));
+
+    const juce::File out (args[2]);
+    out.deleteFile();
+    std::unique_ptr<juce::AudioFormatWriter> writer (wav.createWriterFor (out.createOutputStream().release(), reader->sampleRate, 2, 32, {}, 0));
+    if (writer == nullptr)
+        return 4;
+    writer->writeFromAudioSampleBuffer (all, latency, length - latency);
+    return 0;
+}
+
+static void testPeakLimiter()
+{
+    std::puts ("Limiter");
+    PeakLimiter limiter;
+    limiter.prepare (rate, 2);
+    limiter.setCeilingDb (-1.0f);
+    const float ceiling = juce::Decibels::decibelsToGain (-1.0f);
+
+    std::vector<float> left (4800), right (4800);
+    float* channels[] = { left.data(), right.data() };
+    auto run = [&] (auto source)
+    {
+        float top = 0.0f;
+        for (int b = 0; b < 40; ++b)
+        {
+            for (int i = 0; i < 4800; ++i)
+                left[(size_t) i] = right[(size_t) i] = source (b * 4800 + i);
+            limiter.process (channels, 2, 4800);
+            top = std::max (top, juce::FloatVectorOperations::findMaximum (left.data(), 4800));
+        }
+        return top;
+    };
+
+    const auto sine = [] (int n) { return 2.0f * (float) std::sin (0.05 * n); };
+    check (run (sine) <= ceiling + 1.0e-4f, "a sine 6 dB over stays under the ceiling");
+    check (limiter.gainReductionDb() > 6.0f, "the reduction meter reads it");
+
+    // the worst case: silence, then one sudden full peak. The look-ahead has to catch it.
+    limiter.reset();
+    const auto click = [] (int n) { return n == 20000 ? 8.0f : 0.0f; };
+    check (run (click) <= ceiling + 1.0e-4f, "a sudden peak 18 dB over is caught");
+
+    // and quiet material is left exactly alone, only later
+    limiter.reset();
+    float out = 0.0f;
+    for (int i = 0; i < 2000; ++i)
+    {
+        left[0] = right[0] = 0.25f;
+        limiter.process (channels, 2, 1);
+        out = left[0];
+    }
+    check (near (out, 0.25f, 1.0e-5f), "under the ceiling: no change");
+
+    // inter-sample peaks: a tone at a quarter of the rate, sampled 45 degrees off its peaks. The samples
+    // read 0.85, under full scale, but the wave between them reaches 1.2
+    auto hiddenPeaks = [&] (bool detect)
+    {
+        limiter.setCeilingDb (0.0f);
+        limiter.setInterSample (detect);
+        limiter.reset();
+        auto hidden = [] (int n) { return 1.2f * (float) std::sin (juce::MathConstants<double>::halfPi * n + juce::MathConstants<double>::pi * 0.25); };
+        run (hidden);
+        return limiter.gainReductionDb();
+    };
+    check (hiddenPeaks (false) < 0.01f, "ISP off: peaks between samples go unseen");
+    check (near (hiddenPeaks (true), 1.58f, 0.3f), "ISP on: they are caught");
+
+    // release: a lone peak lets go quickly, steady limiting doesn't pump
+    limiter.setInterSample (false);
+    limiter.setCeilingDb (0.0f);
+    limiter.reset();
+    run ([] (int n) { return n == 200 ? 2.0f : 0.1f; });
+    check (limiter.gainReductionDb() < 0.5f, "a lone peak: back up within the second");
+    limiter.reset();
+    run ([] (int n) { return (n % 2400 < 1200 ? 2.0f : 1.8f) * (n % 2 == 0 ? 1.0f : -1.0f); });
+    const auto first = limiter.gainReductionDb();
+    run ([] (int n) { return (n % 2400 < 1200 ? 2.0f : 1.8f) * (n % 2 == 0 ? 1.0f : -1.0f); });
+    check (first > 4.0f && std::abs (limiter.gainReductionDb() - first) < 0.5f, "steady limiting holds steady");
+
+    // the effect: Threshold brings a quiet file up, Output sets the final level
+    auto fx = StockFx::create (StockFx::Kind::limiter);
+    auto& stock = dynamic_cast<StockFx&> (*fx);
+    stock.set (StockFx::limitThreshold, -12.0f);
+    check (near (gainAt (stock, 1000.0, 0.01f), 12.0f, 0.1f), "quiet file: threshold -12 brings it up 12 dB");
+    const auto loudGain = gainAt (stock, 1000.0, 0.5f);
+    check (near (stock.gainReductionDb(), 6.0f, 1.0f), "too loud once raised: the meter shows the limiting");
+    check (loudGain < 12.0f && loudGain > 0.0f, "too loud once raised: held back");
+    stock.set (StockFx::limitOutput, -6.0f);
+    check (near (gainAt (stock, 1000.0, 0.01f), 6.0f, 0.1f), "output -6: all of it comes down 6 dB");
+
+    // Link: the faders move together, and stop together
+    stock.set (StockFx::limitThreshold, -10.0f);
+    stock.set (StockFx::limitOutput, -2.0f);
+    stock.moveLimiterFader (StockFx::limitThreshold, -13.0f);
+    check (near (stock.get (StockFx::limitThreshold), -13.0f) && near (stock.get (StockFx::limitOutput), -2.0f), "Link off: one fader moves");
+    stock.set (StockFx::limitLink, 1.0f);
+    stock.moveLimiterFader (StockFx::limitThreshold, -16.0f);
+    check (near (stock.get (StockFx::limitThreshold), -16.0f) && near (stock.get (StockFx::limitOutput), -5.0f), "Link on: both move the same");
+    stock.moveLimiterFader (StockFx::limitOutput, 5.0f);
+    check (near (stock.get (StockFx::limitOutput), 0.0f) && near (stock.get (StockFx::limitThreshold), -11.0f), "Link on: they stop together");
+
+    // a quiet button through the engine: louder, and never over its output level
+    {
+        auto e = std::make_unique<PlaybackEngine>();
+        e->prepareForTest (rate, 2);
+        Outputs out2 (2);
+        ShowController sc (*e);
+        auto effect = StockFx::create (StockFx::Kind::limiter);
+        auto& limit = dynamic_cast<StockFx&> (*effect);
+        limit.set (StockFx::limitThreshold, -24.0f);
+        limit.set (StockFx::limitOutput, -6.0f);
+        sc.getShow().cue (0).file = juce::File::getCurrentWorkingDirectory().getChildFile ("loud.wav");
+        sc.setAudioForTest (0, constant (2, 2.0, 0.5f));
+        sc.setPluginForTest (0, 2, std::move (effect));
+        sc.play (0);
+        out2.run (*e, 30);
+        check (near (std::abs (out2.at (0)), juce::Decibels::decibelsToGain (-6.0f), 0.02f), "a raised button comes out at its output level");
+
+        // the settings survive a save
+        juce::MemoryBlock state;
+        limit.getStateInformation (state);
+        auto again = StockFx::create (StockFx::describe (StockFx::Kind::limiter));
+        again->setStateInformation (state.getData(), (int) state.getSize());
+        check (near (dynamic_cast<StockFx&> (*again).get (StockFx::limitOutput), -6.0f), "settings survive a save");
+    }
 }
 
 static void testPlugins()
@@ -2560,6 +2899,13 @@ int main (int argc, char** argv)
 {
     std::setvbuf (stdout, nullptr, _IONBF, 0);   // a crash still shows how far it got
     juce::ScopedJuceInitialiser_GUI juce;
+    if (argc >= 8 && juce::String (argv[1]) == "--limiter")
+    {
+        juce::StringArray args;
+        for (int i = 1; i < argc; ++i)
+            args.add (argv[i]);
+        return renderLimiter (args);
+    }
     if (argc == 3 && juce::String (argv[1]) == "--plugin")
         return testRealPlugin (juce::String (argv[2]));
     if (argc == 3 && juce::String (argv[1]) == "--peaks")   // EngineTests --peaks file: overall min / max of a file
@@ -2605,6 +2951,7 @@ int main (int argc, char** argv)
     testLoudness();
     testRunOfShow();
     testSchedule();
+    testScheduleRealTime();
     testOsc();
     testScheduleOnRemotes();
     testBackupLink();
@@ -2614,6 +2961,8 @@ int main (int argc, char** argv)
     testStreamDeck();
     testRemoteServer();
     testPlugins();
+    testStockFx();
+    testPeakLimiter();
     testRecording();
     testShowFile();
     testFileLoading();

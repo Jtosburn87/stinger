@@ -9,6 +9,8 @@ void chooseButton (ShowController& controller, juce::Component& target, bool all
     if (allowNone)
     {
         menu.addItem (1, "No song (a note)");
+        for (int p = 0; p < (int) show.playlists.size(); ++p)
+            menu.addItem (5000 + p, "Playlist: " + show.playlists[(size_t) p].displayName (p));
         menu.addSeparator();
     }
     for (int b = 0; b < (int) show.banks.size(); ++b)
@@ -24,25 +26,13 @@ void chooseButton (ShowController& controller, juce::Component& target, bool all
         menu.addItem (-1, "No buttons have audio yet", false);
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (target), [done] (int result)
     {
-        if (result > 0)
+        if (result >= 5000)
+            done (-2 - (result - 5000));     // a playlist
+        else if (result > 0)
             done (result - 2);
     });
 }
 
-int parseTimeOfDay (const juce::String& text)
-{
-    auto t = text.trim().toLowerCase();
-    const bool pm = t.endsWith ("pm") || t.endsWith ("p"), am = t.endsWith ("am") || t.endsWith ("a");
-    t = t.retainCharacters ("0123456789:");
-    const auto parts = juce::StringArray::fromTokens (t, ":", {});
-    if (parts.size() < 1 || parts.size() > 3 || t.isEmpty())
-        return -1;
-    int h = parts[0].getIntValue();
-    const int m = parts.size() > 1 ? parts[1].getIntValue() : 0, s = parts.size() > 2 ? parts[2].getIntValue() : 0;
-    if (pm && h < 12) h += 12;
-    if (am && h == 12) h = 0;
-    return h <= 23 && m <= 59 && s <= 59 ? h * 3600 + m * 60 + s : -1;
-}
 
 double parseDuration (const juce::String& text)
 {
@@ -57,8 +47,13 @@ double parseDuration (const juce::String& text)
 
 juce::String timeOfDayText (int seconds)
 {
-    return juce::String (seconds / 3600) + ":" + juce::String ((seconds / 60) % 60).paddedLeft ('0', 2)
-         + (seconds % 60 != 0 ? ":" + juce::String (seconds % 60).paddedLeft ('0', 2) : juce::String());
+    return juce::String (seconds / 3600).paddedLeft ('0', 2) + ":" + juce::String ((seconds / 60) % 60).paddedLeft ('0', 2);
+}
+
+juce::String delayText (double seconds)
+{
+    const int s = juce::jlimit (0, 99 * 60 + 59, (int) std::round (seconds));
+    return juce::String (s / 60).paddedLeft ('0', 2) + ":" + juce::String (s % 60).paddedLeft ('0', 2);
 }
 
 
@@ -71,7 +66,11 @@ ScheduleStrip::ScheduleStrip (ShowController& c) : controller (c)
     start.setTooltip ("Start the countdown. Any time already past is marked missed; nothing fires late.");
     go.setTooltip ("Start the next trigger's button now");
     list.setTooltip ("The list of triggers");
-    start.onClick = [this] { if (controller.isScheduleRunning()) controller.stopSchedule(); else controller.startSchedule(); };
+    start.onClick = [this]
+    {
+        juce::Component::unfocusAllComponents();    // a time still being typed goes in first (it re-arms itself)
+        if (controller.isScheduleRunning()) controller.stopSchedule(); else controller.startSchedule();
+    };
     go.onClick = [this] { controller.scheduleGoNow(); };
     list.onClick = [this] { if (onOpenSchedule) onOpenSchedule(); };
     for (auto* b : { &start, &go, &list, &hold1, &hold2, &hold5, &hold10 })
@@ -179,7 +178,8 @@ namespace
 {
     enum { whenColumn = 1, buttonColumn, statusColumn };
 
-    /** The time or delay of a trigger: click to type. */
+    /** The time or delay of a trigger. Strict: four digits, the colon goes in by itself, and a digit that can't be part of a
+        real time doesn't go in at all. Left unfinished, the old time stays. */
     struct WhenCell : juce::Label
     {
         WhenCell (ShowController& c) : controller (c)
@@ -192,22 +192,64 @@ namespace
                 if (row < 0 || row >= (int) list.size())
                     return;
                 auto item = list[(size_t) row];
+                const auto typed = getText();
+                if (typed.length() != 5)
+                {
+                    show (row);   // not a whole time: back to the one that was there
+                    return;
+                }
                 if (item.kind == ScheduleItem::clock)
                 {
-                    if (const int t = parseTimeOfDay (getText()); t >= 0)
+                    const auto now = juce::Time::getCurrentTime();
+                    if (const int t = parseTimeOfDay (typed, now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()); t >= 0)
                         item.secondsOfDay = t;
                 }
-                else if (const auto d = parseDuration (getText()); d >= 0.0)
+                else if (const auto d = parseDuration (typed); d >= 0.0)
                     item.delaySeconds = d;
                 controller.setScheduleItem (row, item);
+                show (row);
             };
         }
+
+        juce::TextEditor* createEditorComponent() override
+        {
+            auto* editor = juce::Label::createEditorComponent();
+            editor->setInputRestrictions (5, "0123456789");
+            editor->setKeyboardType (juce::TextInputTarget::numericKeyboard);
+            return editor;
+        }
+
+        void editorShown (juce::TextEditor* editor) override
+        {
+            const bool delay = isDelay();
+            editor->setText (maskTime (getText(), delay), false);
+            editor->selectAll();     // typing replaces the whole time
+            editor->onTextChange = [editor, delay]
+            {
+                const auto masked = maskTime (editor->getText(), delay);
+                if (masked != editor->getText())
+                {
+                    editor->setText (masked, false);
+                    editor->moveCaretToEnd();
+                }
+            };
+        }
+
+        bool isDelay() const
+        {
+            const auto& list = controller.getShow().schedule;
+            return row >= 0 && row < (int) list.size() && list[(size_t) row].kind == ScheduleItem::delay;
+        }
+
         void show (int r)
         {
             row = r;
+            if (isBeingEdited())
+                return;   // an update from elsewhere must not throw away what's being typed
             const auto& item = controller.getShow().schedule[(size_t) r];
-            setText (item.kind == ScheduleItem::clock ? timeOfDayText (item.secondsOfDay) : "+" + durationText (item.delaySeconds), juce::dontSendNotification);
-            setTooltip (item.kind == ScheduleItem::clock ? "Time of day (19:05 or 7:05 pm)" : "Minutes:seconds after START");
+            setText (item.kind == ScheduleItem::clock ? timeOfDayText (item.secondsOfDay) : "+" + delayText (item.delaySeconds), juce::dontSendNotification);
+            setTooltip (item.kind == ScheduleItem::clock ? "Hours and minutes, four digits: 1905 for 19:05. A morning time that has already gone by means the afternoon."
+                                                         : "Minutes and seconds after START, four digits: 0130 for 1:30");
         }
         ShowController& controller;
         int row = -1;
@@ -255,20 +297,22 @@ SchedulePanel::SchedulePanel (ShowController& c, std::function<int()> selected) 
 
     auto add = [this] (ScheduleItem::Kind kind)
     {
-        ScheduleItem s;
-        s.kind = kind;
-        s.cueId = selectedButton ? selectedButton() : -1;
-        const auto t = juce::Time::getCurrentTime();
-        s.secondsOfDay = (t.getHours() * 3600 + t.getMinutes() * 60 + 600) % 86400;   // ten minutes from now
-        s.delaySeconds = 300.0;
-        controller.addScheduleItem (s);
+        controller.addScheduleItem (ScheduleItem::make (selectedButton ? selectedButton() : -1, kind, juce::Time::getCurrentTime()));
+        selectLastRow();
     };
     addTime.setTooltip ("A new trigger for the selected button, at a time of day");
     addDelay.setTooltip ("A new trigger for the selected button, a set time after START");
     addTime.onClick = [add] { add (ScheduleItem::clock); };
     addDelay.onClick = [add] { add (ScheduleItem::delay); };
     remove.onClick = [this] { controller.removeScheduleItem (table.getSelectedRow()); };
-    for (auto* b : { &addTime, &addDelay, &remove })
+    start.setTooltip ("Nothing plays until the schedule is started. Times already past are marked missed.");
+    start.onClick = [this]
+    {
+        juce::Component::unfocusAllComponents();    // a time still being typed goes in first (it re-arms itself)
+        if (controller.isScheduleRunning()) controller.stopSchedule(); else controller.startSchedule();
+    };
+    updateStart();
+    for (auto* b : { &addTime, &addDelay, &remove, &start })
     {
         b->setWantsKeyboardFocus (false);
         addAndMakeVisible (b);
@@ -284,6 +328,7 @@ SchedulePanel::~SchedulePanel()
 
 void SchedulePanel::changeListenerCallback (juce::ChangeBroadcaster*)
 {
+    updateStart();
     table.updateContent();
     table.repaint();
 }
@@ -302,17 +347,22 @@ void SchedulePanel::paintCell (juce::Graphics& g, int row, int column, int width
     if (column != statusColumn || row < 0 || row >= (int) list.size())
         return;
     const auto& s = list[(size_t) row];
-    juce::String text = s.kind == ScheduleItem::clock ? "at this time" : "after START";
-    auto colour = Look::textDim;
+    juce::String text = "Waiting for START";
+    auto colour = controller.isScheduleRunning() ? Look::textDim : Look::amber;
     if (controller.isScheduleRunning())
     {
+        text = "Waiting";
         if (row == controller.getNextScheduled())
         {
             text = "NEXT";
             colour = Look::amber;
         }
         if (s.state == ScheduleItem::fired)    { text = "Played"; colour = Look::green; }
-        if (s.state == ScheduleItem::missed)   { text = "MISSED"; colour = Look::red; }
+        if (s.state == ScheduleItem::missed)
+        {
+            text = controller.getAudio (s.cueId) == nullptr ? "MISSED: no audio on the button" : "MISSED";
+            colour = Look::red;
+        }
         if (s.state == ScheduleItem::defeated) { text = "Defeated (GO during hold)"; colour = Look::textDim; }
         if (s.state == ScheduleItem::waiting && s.held)
             text << ", hold +" << durationText (s.heldSeconds);
@@ -363,6 +413,8 @@ void SchedulePanel::resized()
     buttons.removeFromLeft (8);
     addDelay.setBounds (buttons.removeFromLeft (150));
     remove.setBounds (buttons.removeFromRight (90));
+    buttons.removeFromRight (8);
+    start.setBounds (buttons.removeFromRight (110));
     r.removeFromBottom (8);
     table.setBounds (r);
 }
@@ -375,4 +427,17 @@ ScheduleWindow::ScheduleWindow (ShowController& controller, std::function<int()>
     setResizable (true, false);
     setResizeLimits (560, 260, 1600, 1200);
     centreWithSize (getWidth(), getHeight());
+}
+
+void SchedulePanel::selectLastRow()
+{
+    table.updateContent();
+    table.selectRow (getNumRows() - 1);
+}
+
+void SchedulePanel::updateStart()
+{
+    const bool running = controller.isScheduleRunning();
+    start.setButtonText (running ? "STOP" : "START");
+    start.setColour (juce::TextButton::buttonColourId, running ? Look::raised : Look::goGreen);
 }

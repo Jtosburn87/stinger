@@ -77,3 +77,36 @@ private:
     juce::ComboBox monitor, mode;
     juce::Array<std::pair<juce::String, juce::String>> listed;
 };
+
+/** Large, at the top of the left column: the time of day or a countdown. Right-click to choose, and for 12 or 24 hours.
+    A countdown with nothing to count shows the time of day, labelled. */
+class BigClock : public juce::Component,
+                 public juce::SettableTooltipClient,
+                 private juce::Timer
+{
+public:
+    enum Mode { timeOfDay = 0, songLeft, nextTrigger };
+
+    BigClock (ShowController& controller, juce::PropertiesFile& settings);
+    static constexpr int preferredHeight = 72;
+
+    void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    static juce::String timeText (juce::Time t, bool twentyFour);
+
+private:
+    struct Face
+    {
+        juce::String time, caption;
+        juce::Colour colour;
+        bool counting = false;
+    };
+    Face currentFace() const;
+    void timerCallback() override;
+
+    ShowController& controller;
+    juce::PropertiesFile& settings;
+    Mode mode = timeOfDay;
+    bool use24Hour = true;
+    juce::String shown;
+};

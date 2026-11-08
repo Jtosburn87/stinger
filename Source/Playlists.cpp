@@ -50,6 +50,8 @@ void ShowController::removePlaylist (int index)
     if (index < 0 || index >= (int) show.playlists.size())
         return;
     show.playlists.erase (show.playlists.begin() + index);
+    for (auto& r : show.run)
+        r.playlist = r.playlist == index ? -1 : r.playlist > index ? r.playlist - 1 : r.playlist;
     if (show.playlists.empty())
     {
         Playlist p;

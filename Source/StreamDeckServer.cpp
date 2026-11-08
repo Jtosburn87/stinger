@@ -242,6 +242,8 @@ private:
 
 // ---------------------------------------------------------------------------------------------
 
+StreamDeckServer::StreamDeckServer (ShowController& c, int listenPort) : StreamDeckServer (c, listenPort, Options()) {}
+
 StreamDeckServer::StreamDeckServer (ShowController& c, int listenPort, Options o)
     : juce::Thread ("Stream Deck server"), controller (c), port (listenPort), options (std::move (o))
 {

@@ -60,6 +60,7 @@ private:
     void handleMidi (const juce::MidiMessage& m);
     void assign (juce::String target, const juce::KeyPress* key, const MidiTrigger* midi);
     void updateGlobalKeys();
+    bool typing = false;   // a text box has the keyboard: global keys step aside
     void refreshInputs();
     void sendFeedback();
     void save();

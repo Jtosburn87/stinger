@@ -3,13 +3,13 @@
 #include "Show.h"
 
 /** Picks a button from a menu of the show's banks; calls done with its id. */
+/** (allowNone: "no song" gives -1, and playlists are offered too: playlist p gives -2 - p.) */
 void chooseButton (ShowController& controller, juce::Component& target, bool allowNone, std::function<void (int cueId)> done);
 
-/** "19:05", "7:05 pm", "19:05:30" -> seconds of the day, -1 if it isn't a time. */
-int parseTimeOfDay (const juce::String& text);
 /** "90", "5:00", "1:02:30" -> seconds, -1 if it isn't a length of time. */
 double parseDuration (const juce::String& text);
 juce::String timeOfDayText (int seconds);
+juce::String delayText (double seconds);
 
 /** Top of the right column: the countdown to the next trigger (green from Start, yellow at 1 minute, red at 10 seconds),
     hold buttons and GO. Shown when the show has a schedule. */
@@ -39,6 +39,8 @@ class SchedulePanel : public juce::Component,
 {
 public:
     SchedulePanel (ShowController& controller, std::function<int()> selectedButton);
+    /** Selects the newest trigger, ready to set its time. */
+    void selectLastRow();
     ~SchedulePanel() override;
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -54,11 +56,14 @@ private:
     std::function<int()> selectedButton;
     juce::TableListBox table;
     juce::TextButton addTime { "Add at a time" }, addDelay { "Add after a delay" }, remove { "Remove" };
+    juce::TextButton start { "START" };
+    void updateStart();
 };
 
 class ScheduleWindow : public juce::DocumentWindow
 {
 public:
     ScheduleWindow (ShowController& controller, std::function<int()> selectedButton);
+    SchedulePanel& getPanel() { return *dynamic_cast<SchedulePanel*> (getContentComponent()); }
     void closeButtonPressed() override { setVisible (false); }
 };

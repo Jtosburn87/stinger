@@ -100,7 +100,7 @@ const std::vector<CommandMap::Command>& CommandMap::commands()
         add ("edit", "Edit mode on/off", juce::KeyPress ('e', juce::ModifierKeys::commandModifier, 0).getTextDescription());
         add ("globalKeys", "Global keys on/off");
         add ("selfDestruct", "Self Destruct on/off");
-        add ("resetColours", "Reset colours (Self Destruct)");
+        add ("resetColours", "Reset colors (Self Destruct)");
         add ("runGo", "Run of show: GO");
         add ("runNext", "Run of show: NEXT one down");
         add ("runPrev", "Run of show: NEXT one up");

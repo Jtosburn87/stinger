@@ -1363,8 +1363,58 @@ void WaveformEditor::playPreview (bool fromCursor)
 
 void WaveformEditor::paint (juce::Graphics&) {}
 
+void WaveformEditor::layoutForTouch()
+{
+    const int rowHeight = 40, gap = 4;
+    auto r = getLocalBounds();
+    auto spread = [&] (juce::Rectangle<int> row, std::initializer_list<juce::Component*> items)
+    {
+        const int width = (row.getWidth() - gap * ((int) items.size() - 1)) / (int) items.size();
+        for (auto* c : items)
+        {
+            c->setBounds (row.removeFromLeft (width));
+            row.removeFromLeft (gap);
+        }
+    };
+    spread (r.removeFromTop (rowHeight), { &hOut, &hIn, &vOut, &vIn, &fitButton, &undoButton, &redoButton });
+    r.removeFromTop (gap);
+    spread (r.removeFromTop (rowHeight), { &cutButton, &copyButton, &pasteButton, &splitButton, &playFromStart, &playFromCursor, &stopButton });
+    r.removeFromTop (gap);
+    previewOut.setVisible (false);   // Output on this page says where it plays
+
+    hint.setVisible (false);         // it talks about the mouse
+    auto loops = r.removeFromBottom (rowHeight);
+    r.removeFromBottom (gap);
+    setLoopButton.setBounds (loops.removeFromLeft (loops.getWidth() * 4 / 10));
+    loops.removeFromLeft (gap);
+    clearLoopButton.setBounds (loops.removeFromLeft (loops.getWidth() / 3));
+    loops.removeFromLeft (gap);
+    loopStart.setBounds (loops);
+
+    auto fields = r.removeFromBottom (rowHeight - 8);
+    r.removeFromBottom (gap);
+    const int half = fields.getWidth() / 2;
+    auto left = fields.removeFromLeft (half), right = fields;
+    inLabel.setBounds (left.removeFromLeft (28));
+    inField.setBounds (left.reduced (4, 0));
+    outLabel.setBounds (right.removeFromLeft (36));
+    outField.setBounds (right.reduced (4, 0));
+
+    // Android's edge swipes (back, a phone maker's edge panel) start up to about 40 dp in from the side of the screen:
+    // the song's two ends and everything dragged there stay clear of them
+    const int edgeMargin = 40;
+    nav->setBounds (r.removeFromBottom (30).reduced (edgeMargin, 0));
+    r.removeFromBottom (gap);
+    canvas->setBounds (r.reduced (edgeMargin, 0));
+}
+
 void WaveformEditor::resized()
 {
+    if (touchLayout)
+    {
+        layoutForTouch();
+        return;
+    }
     auto r = getLocalBounds();
     auto bar = r.removeFromTop (28);
     for (auto* b : { &hOut, &hIn, &vOut, &vIn })

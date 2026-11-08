@@ -9,6 +9,34 @@
 
 namespace Look
 {
+    // Windows and Mac have these by name. Android has neither, and asking for a missing font fails on every draw.
+    static juce::String sansFont()
+    {
+       #if JUCE_ANDROID
+        return juce::Font::getDefaultSansSerifFontName();
+       #else
+        return isMac ? "Helvetica Neue" : "Segoe UI";
+       #endif
+    }
+
+    static juce::String headingFont()
+    {
+       #if JUCE_ANDROID
+        return juce::Font::getDefaultSansSerifFontName();
+       #else
+        return isMac ? "Avenir Next Condensed" : "Bahnschrift";
+       #endif
+    }
+
+    static juce::String monoFont()
+    {
+       #if JUCE_ANDROID
+        return juce::Font::getDefaultMonospacedFontName();
+       #else
+        return isMac ? "Menlo" : "Consolas";
+       #endif
+    }
+
     juce::Colour cueColour (int index)
     {
         static const juce::uint32 colours[numCueColours] = {
@@ -20,7 +48,7 @@ namespace Look
     juce::String cueColourName (int index)
     {
         static const char* names[numCueColours] = { "Blue", "Amber", "Green", "Violet", "Red", "White", "Teal", "Pink",
-                                                    "Orange", "Yellow", "Lime", "Cyan", "Indigo", "Magenta", "Brown", "Grey" };
+                                                    "Orange", "Yellow", "Lime", "Cyan", "Indigo", "Magenta", "Brown", "Gray" };
         return names[(size_t) juce::jlimit (0, numCueColours - 1, index)];
     }
 
@@ -53,7 +81,7 @@ namespace Look
 
     namespace
     {
-        /** "Custom colour...": a colour picker that sets the button's colour as it moves. */
+        /** "Custom color...": a colour picker that sets the button's colour as it moves. */
         class ColourPicker : public juce::ColourSelector, private juce::ChangeListener
         {
         public:
@@ -89,7 +117,7 @@ namespace Look
         for (int i : paletteOrder())
             m.addColouredItem (100 + i, cueColourName (i), cueColour (i), true, cue.customColour == 0 && cue.colour == i);
         m.addSeparator();
-        m.addItem (1, "Custom colour...", true, cue.customColour != 0);
+        m.addItem (1, "Custom color...", true, cue.customColour != 0);
         juce::Component::SafePointer<juce::Component> safe (&target);
         m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&target), [safe, &controller, cueId] (int result)
         {
@@ -115,12 +143,12 @@ namespace Look
 
     juce::Font font (float height, bool bold)
     {
-        return juce::Font (juce::FontOptions (isMac ? "Helvetica Neue" : "Segoe UI", height, bold ? juce::Font::bold : juce::Font::plain));
+        return juce::Font (juce::FontOptions (sansFont(), height, bold ? juce::Font::bold : juce::Font::plain));
     }
 
     juce::Font condensed (float height)
     {
-        return juce::Font (juce::FontOptions (isMac ? "Avenir Next Condensed" : "Bahnschrift", height, juce::Font::bold)).withExtraKerningFactor (0.08f);
+        return juce::Font (juce::FontOptions (headingFont(), height, juce::Font::bold)).withExtraKerningFactor (0.08f);
     }
 
     float textWidth (const juce::Font& f, const juce::String& s)
@@ -130,7 +158,7 @@ namespace Look
 
     juce::Font mono (float height, bool bold)
     {
-        return juce::Font (juce::FontOptions (isMac ? "Menlo" : "Consolas", height, bold ? juce::Font::bold : juce::Font::plain));
+        return juce::Font (juce::FontOptions (monoFont(), height, bold ? juce::Font::bold : juce::Font::plain));
     }
 
     LookAndFeel::LookAndFeel()
@@ -175,6 +203,8 @@ namespace Look
 
     juce::Font LookAndFeel::getTextButtonFont (juce::TextButton& b, int buttonHeight)
     {
+        if (b.getProperties().contains ("huge"))   // the phone's GO, STOP and FADE
+            return condensed (juce::jmin ((float) buttonHeight * 0.42f, (float) b.getWidth() * 1.1f / (float) juce::jmax (1, b.getButtonText().length())));
         if (b.getProperties().contains ("big"))
             return condensed (juce::jmin (26.0f, (float) buttonHeight * 0.5f));
         return font (juce::jmin (15.0f, (float) buttonHeight * 0.5f), true);

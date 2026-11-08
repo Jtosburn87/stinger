@@ -94,7 +94,7 @@ private:
     void startRenamingBank (int bank);
     void finishRenamingBank (bool keep);
     juce::TextButton fileButton { "File" }, audioButton { "Audio" }, editButton { "EDIT" },
-                     globalButton { "GLOBAL KEYS" }, controlsButton { "Controls" }, importButton { "Import" };
+                     globalButton { "GLOBAL KEYS" }, controlsButton { "Controls" }, importButton { "Import" }, runButton { "Run of Show" };
     void showImport (bool links);
     Downloader downloader;
     std::unique_ptr<ImportPanel> importPanel;          // kept while the window is closed: downloads carry on
@@ -128,6 +128,7 @@ private:
     void showBackup();
     void updateBackupBanner();
     CountdownDisplay countdown;
+    BigClock bigClock;
     ScheduleStrip scheduleStrip;
     std::unique_ptr<RunOfShowWindow> runWindow;
     std::unique_ptr<ScheduleWindow> scheduleWindow;

@@ -36,7 +36,7 @@ namespace Look
     juce::Colour shade (juce::Colour c, float amount = 0.32f);
     /** Black or white, whichever reads better on c. */
     juce::Colour textOn (juce::Colour c);
-    /** The colour menu (palette + "Custom colour..."); calls changed() after setting the cue's colour. */
+    /** The colour menu (palette + "Custom color..."); calls changed() after setting the cue's colour. */
     void showColourMenu (juce::Component& target, ShowController& controller, int cueId);
     /** The custom colour picker, next to screenArea. */
     void showColourPicker (juce::Rectangle<int> screenArea, ShowController& controller, int cueId);

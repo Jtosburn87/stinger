@@ -10,6 +10,9 @@ class NowPlaying : public juce::Component,
 public:
     explicit NowPlaying (ShowController& controller);
 
+    /** Fade all / Stop all, off when the page has its own. */
+    void setAllButtonsShown (bool shown);
+
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
@@ -33,6 +36,7 @@ private:
 
     ShowController& controller;
     juce::TextButton fadeAll { "FADE ALL" }, stopAll { "STOP ALL" };
+    bool allButtonsShown = true;
     std::vector<Card> cards;
     int scrubVoice = -1;                // voice whose bar is being dragged
     double scrubFraction = -1.0;        // where it was dragged to (drawn until the engine catches up)

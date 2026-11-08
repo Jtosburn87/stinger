@@ -1,0 +1,262 @@
+diff --git a/modules/juce_core/native/juce_Files_android.cpp b/modules/juce_core/native/juce_Files_android.cpp
+index 51ed65dec..9c94060d2 100644
+--- a/modules/juce_core/native/juce_Files_android.cpp
++++ b/modules/juce_core/native/juce_Files_android.cpp
+@@ -894,7 +894,13 @@ JUCE_API bool JUCE_CALLTYPE Process::openDocument (const String& fileName, const
+     const LocalRef<jstring> action (javaString ("android.intent.action.VIEW"));
+     LocalRef<jobject> intent (env->NewObject (AndroidIntent, AndroidIntent.constructWithUri, action.get(), urlToUri (targetURL).get()));
+ 
+-    env->CallVoidMethod (getCurrentActivity(), AndroidContext.startActivity, intent.get());
++    // Stinger (Samsung DeX): from the app's own window (on the monitor), not the newest activity (the deck on the phone)
++    LocalRef<jobject> activity (getMainActivity());
++
++    if (activity == nullptr)
++        activity = getCurrentActivity();
++
++    env->CallVoidMethod (activity.get(), AndroidContext.startActivity, intent.get());
+     return true;
+ }
+ 
+diff --git a/modules/juce_core/native/juce_JNIHelpers_android.cpp b/modules/juce_core/native/juce_JNIHelpers_android.cpp
+index dd8d55147..8bd3a9c1a 100644
+--- a/modules/juce_core/native/juce_JNIHelpers_android.cpp
++++ b/modules/juce_core/native/juce_JNIHelpers_android.cpp
+@@ -598,7 +598,13 @@ void FragmentOverlay::open()
+     env->CallVoidMethod (bundle.get(), AndroidBundle.putLong, javaString ("cppThis").get(), (jlong) this);
+     env->CallVoidMethod (native.get(), AndroidFragment.setArguments, bundle.get());
+ 
+-    LocalRef<jobject> fm (env->CallObjectMethod (getCurrentActivity().get(), AndroidActivity.getFragmentManager));
++    // Stinger (Samsung DeX): from the app's own window (on the monitor), not the newest activity (the deck on the phone)
++    LocalRef<jobject> activity (getMainActivity());
++
++    if (activity == nullptr)
++        activity = getCurrentActivity();
++
++    LocalRef<jobject> fm (env->CallObjectMethod (activity.get(), AndroidActivity.getFragmentManager));
+     env->CallVoidMethod (native.get(), AndroidDialogFragment.show, fm.get(), javaString ("FragmentOverlay").get());
+ }
+ 
+diff --git a/modules/juce_gui_basics/desktop/juce_Desktop.cpp b/modules/juce_gui_basics/desktop/juce_Desktop.cpp
+index b105bb0b9..2e9e32908 100644
+--- a/modules/juce_gui_basics/desktop/juce_Desktop.cpp
++++ b/modules/juce_gui_basics/desktop/juce_Desktop.cpp
+@@ -190,7 +190,16 @@ int Desktop::getNumMouseSources() const noexcept
+ int Desktop::getNumDraggingMouseSources() const noexcept                        { return mouseSources->getNumDraggingMouseSources(); }
+ MouseInputSource* Desktop::getMouseSource (int index) const noexcept            { return mouseSources->getMouseSource (index); }
+ MouseInputSource* Desktop::getDraggingMouseSource (int index) const noexcept    { return mouseSources->getDraggingMouseSource (index); }
+-MouseInputSource Desktop::getMainMouseSource() const noexcept                   { return MouseInputSource (mouseSources->sources.getUnchecked (0)); }
++MouseInputSource Desktop::getMainMouseSource() const noexcept
++{
++   #if JUCE_ANDROID
++    // Stinger (Samsung DeX): once a real mouse is in use it's the main one, so "at the mouse" means where the mouse is
++    for (auto& source : mouseSources->sourceArray)
++        if (source.getType() == MouseInputSource::InputSourceType::mouse)
++            return source;
++   #endif
++    return MouseInputSource (mouseSources->sources.getUnchecked (0));
++}
+ void Desktop::beginDragAutoRepeat (int interval)                                { mouseSources->beginDragAutoRepeat (interval); }
+ 
+ //==============================================================================
+diff --git a/modules/juce_gui_basics/detail/juce_MouseInputSourceImpl.h b/modules/juce_gui_basics/detail/juce_MouseInputSourceImpl.h
+index 68b68ce56..2918e92fa 100644
+--- a/modules/juce_gui_basics/detail/juce_MouseInputSourceImpl.h
++++ b/modules/juce_gui_basics/detail/juce_MouseInputSourceImpl.h
+@@ -96,8 +96,13 @@ public:
+ 
+     Point<float> getRawScreenPosition() const noexcept
+     {
++       #if JUCE_ANDROID
++        // Stinger (Samsung DeX): Android only reports where fingers are, so a mouse is where its last event put it
++        return unboundedMouseOffset + lastPointerState.position;
++       #else
+         return unboundedMouseOffset + (inputType != MouseInputSource::InputSourceType::touch ? MouseInputSource::getCurrentRawMousePosition()
+                                                                                              : lastPointerState.position);
++       #endif
+     }
+ 
+     void setScreenPosition (Point<float> p)
+diff --git a/modules/juce_gui_basics/native/juce_Windowing_android.cpp b/modules/juce_gui_basics/native/juce_Windowing_android.cpp
+index f06feb916..43608eb76 100644
+--- a/modules/juce_gui_basics/native/juce_Windowing_android.cpp
++++ b/modules/juce_gui_basics/native/juce_Windowing_android.cpp
+@@ -1305,10 +1305,11 @@ public:
+             if (Desktop::getInstance().getKioskModeComponent() != nullptr)
+                 setNavBarsHidden (true);
+ 
+-            LocalRef<jobject> activity (getCurrentActivity());
++            // Stinger (Samsung DeX): the app's own window, not the newest activity (the deck on the phone's screen)
++            LocalRef<jobject> activity (getMainActivity());
+ 
+             if (activity == nullptr)
+-                activity = getMainActivity();
++                activity = getCurrentActivity();
+ 
+             viewGroup = GlobalRef (LocalRef<jobject> (env->CallObjectMethod (activity.get(), AndroidContext.getSystemService, javaString ("window").get())));
+             env->CallVoidMethod (viewGroup.get(), AndroidViewManager.addView, view.get(), windowLayoutParams.get());
+@@ -1678,7 +1679,7 @@ public:
+ 
+         if (! handled)
+         {
+-            LocalRef<jobject> activity (getCurrentActivity());
++            LocalRef<jobject> activity (getMainActivity());   // Stinger (Samsung DeX): see addToDesktop
+ 
+             if (activity != nullptr)
+             {
+@@ -2656,7 +2657,14 @@ void Displays::findDisplays (float masterScale)
+     LocalRef<jobject> usableSize (makeAndroidPoint ({}));
+     LocalRef<jstring> windowServiceString (javaString ("window"));
+     LocalRef<jobject> displayMetrics (env->NewObject (AndroidDisplayMetrics, AndroidDisplayMetrics.create));
+-    LocalRef<jobject> windowManager (env->CallObjectMethod (getAppContext().get(), AndroidContext.getSystemService, windowServiceString.get()));
++    // Stinger (Samsung DeX): the screen the app's window is on (an activity's window service belongs to its screen),
++    // not always the phone's own screen
++    LocalRef<jobject> displayContext (getMainActivity());
++
++    if (displayContext == nullptr)
++        displayContext = getAppContext();
++
++    LocalRef<jobject> windowManager (env->CallObjectMethod (displayContext.get(), AndroidContext.getSystemService, windowServiceString.get()));
+     LocalRef<jobject> display (env->CallObjectMethod (windowManager, AndroidWindowManager.getDefaultDisplay));
+ 
+     if (const auto getRealMetricsMethod = AndroidDisplay17.getRealMetrics)
+@@ -2748,13 +2756,119 @@ Image detail::WindowingHelpers::createIconForFile (const File& /*file*/)
+ }
+ 
+ //==============================================================================
++// Stinger (Samsung DeX): real pointer shapes for a mouse - android.view.PointerIcon on the window's view,
++// a system shape for JUCE's standard cursors and a bitmap for drawn ones
+ class MouseCursor::PlatformSpecificHandle
+ {
+ public:
+-    PlatformSpecificHandle (const MouseCursor::StandardCursorType)      {}
+-    PlatformSpecificHandle (const detail::CustomMouseCursorInfo&)       {}
++    PlatformSpecificHandle (const MouseCursor::StandardCursorType type)    : systemType (systemTypeFor (type)) {}
++    PlatformSpecificHandle (const detail::CustomMouseCursorInfo& info)     : custom (info) {}
++
++    static void showInWindow (PlatformSpecificHandle* handle, ComponentPeer* peer)
++    {
++        if (peer == nullptr || peer->getNativeHandle() == nullptr)
++            return;
++
++        auto* env = getEnv();
++        auto view = (jobject) peer->getNativeHandle();
++        LocalRef<jobject> icon (handle != nullptr ? handle->createIcon (env, view) : systemIcon (env, view, typeArrow));
++
++        if (icon == nullptr)
++            return;
++
++        LocalRef<jclass> viewClass (env->FindClass ("android/view/View"));
++        static const jmethodID setPointerIcon = env->GetMethodID (viewClass, "setPointerIcon", "(Landroid/view/PointerIcon;)V");
++        env->CallVoidMethod (view, setPointerIcon, icon.get());
++    }
++
++private:
++    static constexpr int typeNull = 0, typeArrow = 1000;
++
++    static int systemTypeFor (MouseCursor::StandardCursorType type)
++    {
++        switch (type)
++        {
++            case MouseCursor::NoCursor:                      return typeNull;
++            case MouseCursor::WaitCursor:                    return 1004;
++            case MouseCursor::IBeamCursor:                   return 1008;
++            case MouseCursor::CrosshairCursor:               return 1007;
++            case MouseCursor::CopyingCursor:                 return 1011;
++            case MouseCursor::PointingHandCursor:            return 1002;
++            case MouseCursor::DraggingHandCursor:            return 1021;
++            case MouseCursor::LeftRightResizeCursor:
++            case MouseCursor::LeftEdgeResizeCursor:
++            case MouseCursor::RightEdgeResizeCursor:         return 1014;
++            case MouseCursor::UpDownResizeCursor:
++            case MouseCursor::TopEdgeResizeCursor:
++            case MouseCursor::BottomEdgeResizeCursor:        return 1015;
++            case MouseCursor::UpDownLeftRightResizeCursor:   return 1013;
++            case MouseCursor::TopLeftCornerResizeCursor:
++            case MouseCursor::BottomRightCornerResizeCursor: return 1017;
++            case MouseCursor::TopRightCornerResizeCursor:
++            case MouseCursor::BottomLeftCornerResizeCursor:  return 1016;
++            case MouseCursor::ParentCursor:
++            case MouseCursor::NormalCursor:
++            case MouseCursor::NumStandardCursorTypes:
++            default:                                         return typeArrow;
++        }
++    }
++
++    static jobject systemIcon (JNIEnv* env, jobject view, int type)
++    {
++        LocalRef<jclass> viewClass (env->FindClass ("android/view/View"));
++        LocalRef<jclass> iconClass (env->FindClass ("android/view/PointerIcon"));
++        static const jmethodID getContext = env->GetMethodID (viewClass, "getContext", "()Landroid/content/Context;");
++        static const jmethodID getSystemIcon = env->GetStaticMethodID (iconClass, "getSystemIcon",
++                                                                        "(Landroid/content/Context;I)Landroid/view/PointerIcon;");
++        LocalRef<jobject> context (env->CallObjectMethod (view, getContext));
++        return env->CallStaticObjectMethod (iconClass, getSystemIcon, context.get(), (jint) type);
++    }
++
++    jobject createIcon (JNIEnv* env, jobject view)
++    {
++        if (systemType >= 0)
++            return systemIcon (env, view, systemType);
++
++        if (customIcon == nullptr)
++        {
++            // drawn at the screen's density, hotspot scaled with it (as JUCE does on Windows)
++            const auto logical = custom.image.getScaledBounds();
++            const auto density = (float) Desktop::getInstance().getDisplays().getPrimaryDisplay()->scale;
++            const auto width = jmax (1, roundToInt ((float) logical.getWidth() * density));
++            const auto height = jmax (1, roundToInt ((float) logical.getHeight() * density));
++            const auto image = custom.image.getImage().rescaled (width, height).convertedToFormat (Image::ARGB);
++            const auto effectiveScale = (float) width / (float) jmax (1.0, logical.getWidth());
++
++            LocalRef<jintArray> pixels (env->NewIntArray (width * height));
++            {
++                std::vector<jint> argb ((size_t) (width * height));
++                for (int y = 0; y < height; ++y)
++                    for (int x = 0; x < width; ++x)
++                        argb[(size_t) (y * width + x)] = (jint) image.getPixelAt (x, y).getARGB();
++                env->SetIntArrayRegion (pixels.get(), 0, width * height, argb.data());
++            }
++
++            LocalRef<jclass> bitmapClass (env->FindClass ("android/graphics/Bitmap"));
++            LocalRef<jclass> configClass (env->FindClass ("android/graphics/Bitmap$Config"));
++            LocalRef<jclass> iconClass (env->FindClass ("android/view/PointerIcon"));
++            static const jmethodID createBitmap = env->GetStaticMethodID (bitmapClass, "createBitmap",
++                                                                          "([IIILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;");
++            static const jfieldID argb8888 = env->GetStaticFieldID (configClass, "ARGB_8888", "Landroid/graphics/Bitmap$Config;");
++            static const jmethodID create = env->GetStaticMethodID (iconClass, "create", "(Landroid/graphics/Bitmap;FF)Landroid/view/PointerIcon;");
++
++            LocalRef<jobject> config (env->GetStaticObjectField (configClass, argb8888));
++            LocalRef<jobject> bitmap (env->CallStaticObjectMethod (bitmapClass, createBitmap, pixels.get(), (jint) width, (jint) height, config.get()));
++            const auto hx = (jfloat) jlimit (0, width - 1,  roundToInt ((float) custom.hotspot.x * effectiveScale));
++            const auto hy = (jfloat) jlimit (0, height - 1, roundToInt ((float) custom.hotspot.y * effectiveScale));
++            customIcon = GlobalRef (LocalRef<jobject> (env->CallStaticObjectMethod (iconClass, create, bitmap.get(), hx, hy)));
++        }
++
++        return customIcon == nullptr ? nullptr : env->NewLocalRef (customIcon.get());
++    }
+ 
+-    static void showInWindow (PlatformSpecificHandle*, ComponentPeer*)  {}
++    int systemType = -1;
++    detail::CustomMouseCursorInfo custom;
++    GlobalRef customIcon;
+ };
+ 
+ //==============================================================================
+diff --git a/modules/juce_gui_basics/windows/juce_TopLevelWindow.cpp b/modules/juce_gui_basics/windows/juce_TopLevelWindow.cpp
+index ba3236486..e1f6a901a 100644
+--- a/modules/juce_gui_basics/windows/juce_TopLevelWindow.cpp
++++ b/modules/juce_gui_basics/windows/juce_TopLevelWindow.cpp
+@@ -140,8 +140,12 @@ void TopLevelWindow::setDropShadowEnabled (const bool useShadow)
+     }
+ }
+ 
+-void TopLevelWindow::setUsingNativeTitleBar (const bool shouldUseNativeTitleBar)
++void TopLevelWindow::setUsingNativeTitleBar (bool shouldUseNativeTitleBar)
+ {
++   #if JUCE_ANDROID
++    shouldUseNativeTitleBar = false;   // Stinger (Samsung DeX): Android has no title bar to give a window, so JUCE draws one (with Close)
++   #endif
++
+     if (useNativeTitleBar != shouldUseNativeTitleBar)
+     {
+         detail::FocusRestorer focusRestorer;

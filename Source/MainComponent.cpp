@@ -100,10 +100,11 @@ void MainComponent::showCredits()
 }
 
 MainComponent::MainComponent (ShowController& c, juce::PropertiesFile& s)
-    : controller (c), settings (s), surface (c, s), streamDeck (c), remote (c, s), grid (c), playlist (c), nowPlaying (c), cueSettings (c), deviceWatch (c), countdown (c, s), scheduleStrip (c), osc (c), backupLink (c)
+    : controller (c), settings (s), surface (c, s), streamDeck (c), remote (c, s), grid (c), playlist (c), nowPlaying (c), cueSettings (c), deviceWatch (c), countdown (c, s), bigClock (c, s), scheduleStrip (c), osc (c), backupLink (c)
 {
     addAndMakeVisible (grid);
     addAndMakeVisible (playlist);
+    addAndMakeVisible (bigClock);
     playlist.getBank = [this] { return grid.getBank(); };
     playlist.onKey = [this] (const juce::KeyPress& key) { return keyPressed (key); };
     addAndMakeVisible (nowPlaying);
@@ -147,6 +148,11 @@ MainComponent::MainComponent (ShowController& c, juce::PropertiesFile& s)
     };
     addAndMakeVisible (importButton);
 
+    runButton.setWantsKeyboardFocus (false);
+    runButton.setTooltip ("The run of show: who, what song, notes and time, in order, with its own GO");
+    runButton.onClick = [this] { showRunOfShow(); };
+    addAndMakeVisible (runButton);
+
     playbackModeButton.setWantsKeyboardFocus (false);
     playbackModeButton.setTooltip ("What a button does to what's already playing (saved in the show)");
     playbackModeButton.onClick = [this]
@@ -165,12 +171,12 @@ MainComponent::MainComponent (ShowController& c, juce::PropertiesFile& s)
 
     selfDestructButton.setClickingTogglesState (true);
     selfDestructButton.setWantsKeyboardFocus (false);
-    selfDestructButton.setTooltip ("Self Destruct: each button goes black once it has played (saved in the show). Reset brings the colours back.");
+    selfDestructButton.setTooltip ("Self Destruct: each button goes black once it has played (saved in the show). Reset brings the colors back.");
     selfDestructButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff8a1c1f));
     selfDestructButton.onClick = [this] { controller.setSelfDestruct (selfDestructButton.getToggleState()); };
     addAndMakeVisible (selfDestructButton);
     resetColoursButton.setWantsKeyboardFocus (false);
-    resetColoursButton.setTooltip ("Give every black button its colour back");
+    resetColoursButton.setTooltip ("Give every black button its color back");
     resetColoursButton.onClick = [this] { controller.resetColours(); };
     resetColoursButton.setEnabled (false);
     addAndMakeVisible (resetColoursButton);
@@ -197,13 +203,21 @@ MainComponent::MainComponent (ShowController& c, juce::PropertiesFile& s)
     globalButton.setWantsKeyboardFocus (false);
     globalButton.setTooltip ("On: Stinger's keys work from any app (and other apps don't get those keys). Turn off to type in other apps.");
     globalButton.onClick = [this] { surface.setGlobal (globalButton.getToggleState()); };
+   #if ! JUCE_ANDROID
     addAndMakeVisible (globalButton);
+   #endif
     controlsButton.setWantsKeyboardFocus (false);
     controlsButton.setTooltip ("Keys, MIDI and light feedback for every command");
     controlsButton.onClick = [this] { showControls(); };
     addAndMakeVisible (controlsButton);
 
     grid.onSelect = [this] (int id) { cueSettings.setCue (id); };
+    grid.onAddToSchedule = [this] (int id, ScheduleItem::Kind kind)
+    {
+        controller.addScheduleItem (ScheduleItem::make (id, kind, juce::Time::getCurrentTime()));
+        showSchedule();
+        scheduleWindow->getPanel().selectLastRow();
+    };
     cueSettings.setCue (grid.getSelected());
 
     // bank rename: Enter or clicking away keeps it, Esc cancels
@@ -421,9 +435,13 @@ void MainComponent::resized()
     bar.removeFromRight (8);
     controlsButton.setBounds (bar.removeFromRight (84));
     bar.removeFromRight (8);
+   #if ! JUCE_ANDROID   // Android (Samsung DeX) can't give an app keys from other apps: no GLOBAL KEYS there
     globalButton.setBounds (bar.removeFromRight (110));
     bar.removeFromRight (8);
+   #endif
     importButton.setBounds (bar.removeFromRight (76));
+    bar.removeFromRight (8);
+    runButton.setBounds (bar.removeFromRight (104));
     bar.removeFromRight (12);
     // bank tabs: 118 wide while there's room (up to 8 banks share what's left)
     const int tabWidth = bankButtons.isEmpty() ? 0 : std::min (118, (bar.getWidth() - 4 * bankButtons.size()) / bankButtons.size());
@@ -440,7 +458,11 @@ void MainComponent::resized()
     takeOverButton.setBounds (backupBanner.getBounds().removeFromRight (150).reduced (4));
     backToMain.setBounds (deviceBanner.getBounds().removeFromRight (190).reduced (4));
     cueSettings.setBounds (r.removeFromBottom (editorHeight));
-    playlist.setBounds (r.removeFromLeft (playlistWidth));
+    {
+        auto left = r.removeFromLeft (playlistWidth);
+        bigClock.setBounds (left.removeFromTop (BigClock::preferredHeight));
+        playlist.setBounds (left);
+    }
     {
         auto right = r.removeFromRight (nowPlayingWidth);
         scheduleStrip.setVisible (! controller.getShow().schedule.empty());
@@ -614,6 +636,18 @@ void MainComponent::showFileMenu()
             {
                 if (safe == nullptr || ! go)
                     return;
+               #if JUCE_ANDROID
+                // Samsung DeX: shows live in Stinger's own storage on Android: a list of them, not a file picker
+                auto files = safe->controller.getHomeFolder().findChildFiles (juce::File::findFiles, true, "*.stinger");
+                files.sort();
+                juce::PopupMenu shows;
+                for (auto& f : files)
+                    shows.addItem (f.getFileNameWithoutExtension(), [safe, f] { if (safe != nullptr) safe->openShow (f); });
+                if (files.isEmpty())
+                    shows.addItem ("No saved shows", false, false, [] {});
+                shows.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (safe->fileButton));
+                return;
+               #endif
                 const auto start = safe->controller.getShowFile() != juce::File() ? safe->controller.getShowFile()
                                                                                   : safe->controller.getHomeFolder();
                 safe->chooser = std::make_unique<juce::FileChooser> ("Open show", start, showWildcard);
@@ -949,6 +983,14 @@ void MainComponent::updateBackupBanner()
 
 juce::Image MainComponent::panelImage (const juce::String& name)
 {
+    if (name.startsWith ("clock"))     // panel-clock0/1/2: the big clock, by mode
+    {
+        controller.startSchedule();
+        settings.setValue ("clockMode", name.getLastCharacters (1).getIntValue());
+        BigClock clock (controller, settings);
+        clock.setSize (280, BigClock::preferredHeight);
+        return clock.createComponentSnapshot (clock.getLocalBounds());
+    }
     std::unique_ptr<juce::Component> panel;
     if (name == "audio")
         panel = std::make_unique<AudioPanel> (deviceWatch, settings);

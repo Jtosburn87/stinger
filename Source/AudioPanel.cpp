@@ -3,7 +3,11 @@
 
 namespace
 {
+   #if JUCE_ANDROID
+    constexpr int backupHeight = 0;     // Samsung DeX: no backup device on Android (DeviceWatch::check)
+   #else
     constexpr int backupHeight = 170;
+   #endif
 }
 
 DeviceWatch::Backup AudioPanel::loadBackup (juce::PropertiesFile& settings)
@@ -23,6 +27,7 @@ AudioPanel::AudioPanel (DeviceWatch& w, juce::PropertiesFile& s)
     addAndMakeVisible (selector);
     heading.setFont (Look::condensed (17.0f));
     heading.setColour (juce::Label::textColourId, Look::amber);
+   #if ! JUCE_ANDROID
     for (auto* l : { &heading, &typeLabel, &deviceLabel, &outputLabel })
         addAndMakeVisible (l);
     for (auto* c : { &type, &device, &output })
@@ -30,6 +35,7 @@ AudioPanel::AudioPanel (DeviceWatch& w, juce::PropertiesFile& s)
         c->setWantsKeyboardFocus (false);
         addAndMakeVisible (c);
     }
+   #endif
     type.setTooltip ("The kind of driver the backup device uses");
     device.setTooltip ("If the interface is lost, Stinger moves here by itself and what's playing carries on");
     output.setTooltip ("Where the songs go on the backup device");

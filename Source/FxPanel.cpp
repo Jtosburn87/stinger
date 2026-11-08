@@ -1,6 +1,9 @@
 #include "FxPanel.h"
 #include "PluginHost.h"
 #include "Look.h"
+#if JUCE_ANDROID
+ #include "StockFxEditor.h"
+#endif
 
 /** A plugin's own window (or JUCE's generic sliders if it has none). Stays in front of Stinger. */
 class FxPanel::EditorWindow : public juce::DocumentWindow
@@ -64,7 +67,9 @@ FxPanel::FxPanel (ShowController& c) : controller (c)
     pluginsButton.setWantsKeyboardFocus (false);
     pluginsButton.setTooltip ("Scan for VST3 plugins, see which ones failed");
     pluginsButton.onClick = [this] { showPluginList(); };
+   #if ! JUCE_ANDROID   // Samsung DeX: no VST3 on Android, nothing to scan for
     addAndMakeVisible (pluginsButton);
+   #endif
 
     controller.onPluginGoing = [this] (juce::AudioProcessor* p) { closeEditorFor (p); };
     controller.addChangeListener (this);
@@ -117,10 +122,18 @@ void FxPanel::showPluginMenu (int slot)
     auto* host = controller.getPluginHost();
     if (host == nullptr)
         return;
+   #if JUCE_ANDROID
+    // Samsung DeX: Stinger's own effects are the ones there are
+    const juce::Array<juce::PluginDescription> effects { StockFx::describe (StockFx::Kind::eq),
+                                                         StockFx::describe (StockFx::Kind::compressor),
+                                                         StockFx::describe (StockFx::Kind::limiter) };
+    juce::PopupMenu m;
+   #else
     const auto effects = host->effects();
     juce::PopupMenu m;
     if (effects.isEmpty())
         m.addItem (-1, "No plugins yet: Plugins... scans for them", false);
+   #endif
     juce::String maker;
     juce::PopupMenu sub;
     auto flush = [&]
@@ -143,7 +156,9 @@ void FxPanel::showPluginMenu (int slot)
     auto* fx = controller.getFx (cueId);
     m.addItem (1, "Remove", fx != nullptr && fx->getPlugin (slot) != nullptr
                             || ! controller.getShow().cue (cueId).plugins[(size_t) slot].isEmpty());
+   #if ! JUCE_ANDROID
     m.addItem (2, "Plugins (scan)...");
+   #endif
 
     juce::Component::SafePointer<FxPanel> safe (this);
     const int id = cueId;
@@ -183,6 +198,16 @@ void FxPanel::openEditor (int slot)
     const auto title = fx->getDescription (slot).name + juce::String::fromUTF8 (" \xe2\x80\x94 ") + controller.getShow().cue (cueId).name;
     juce::Component::SafePointer<FxPanel> safe (this);
     editors.push_back (std::make_unique<EditorWindow> (title, *plugin, [safe, plugin] { if (safe != nullptr) safe->closeEditorFor (plugin); }));
+   #if JUCE_ANDROID
+    // Samsung DeX: Stinger's own effects have no window of their own; JUCE's generic one would be empty
+    if (auto* stock = dynamic_cast<StockFx*> (plugin))
+    {
+        auto& window = *editors.back();
+        const int id = cueId;
+        window.setContentOwned (new StockFxEditor (*stock, [safe, id] { if (safe != nullptr) safe->controller.cueChanged (id); }), true);
+        window.centreWithSize (window.getWidth(), window.getHeight());
+    }
+   #endif
 }
 
 void FxPanel::closeEditorFor (juce::AudioProcessor* p)
@@ -211,7 +236,11 @@ void FxPanel::paint (juce::Graphics& g)
 {
     g.setColour (juce::Colour (0xffc9d0d8));
     g.setFont (Look::condensed (15.0f));
+   #if JUCE_ANDROID
+    g.drawText ("EFFECTS", getLocalBounds().removeFromTop (24), juce::Justification::centredLeft);
+   #else
     g.drawText ("EFFECTS (VST3)", getLocalBounds().removeFromTop (24), juce::Justification::centredLeft);
+   #endif
 }
 
 void FxPanel::resized()
