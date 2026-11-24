@@ -10,7 +10,7 @@ on:
 
 jobs:
   mac:
-    runs-on: macos-14
+    runs-on: macos-latest   # GitHub retires old Mac images (macos-14 is gone); latest follows them
     timeout-minutes: 60
     permissions:
       contents: write
