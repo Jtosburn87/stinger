@@ -1166,7 +1166,8 @@ void ShowController::updateAutosave()
     if (autosave == nullptr)
         return;
     const auto now = juce::Time::getMillisecondCounter();
-    if (! autosaveNow && now - lastAutosave < autosaveMs)
+    // lastAutosave 0 = never written: due now, however soon after the computer started (the counter starts at boot)
+    if (! autosaveNow && lastAutosave != 0 && now - lastAutosave < autosaveMs)
         return;
     autosaveNow = false;
     lastAutosave = now;

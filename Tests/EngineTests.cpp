@@ -1489,7 +1489,7 @@ static void testAutosave()
         Autosave autosave (folder);
         ShowController sc (e);
         sc.setAutosave (&autosave);
-        sc.setAutosaveIntervalForTest (1000000);
+        sc.setAutosaveIntervalForTest (1000000000);   // longer than the computer has been on, so the first write has to come anyway
         auto& show = sc.getShow();
         for (int i = 0; i < 2; ++i)
         {
