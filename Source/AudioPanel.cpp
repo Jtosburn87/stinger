@@ -19,12 +19,18 @@ DeviceWatch::Backup AudioPanel::loadBackup (juce::PropertiesFile& settings)
     return b;
 }
 
-AudioPanel::AudioPanel (DeviceWatch& w, juce::PropertiesFile& s)
+AudioPanel::AudioPanel (DeviceWatch& w, juce::PropertiesFile& s, ControlSurface* surface)
     : watch (w), settings (s),
       selector (w.getManager(), 0, PlaybackEngine::maxInputs, 2, PlaybackEngine::maxOutputs, false, false, false, false)
 {
     watch.setUserChanging (true);
     addAndMakeVisible (selector);
+    if (surface != nullptr)
+    {
+        midiInputs = std::make_unique<MidiInputList> (*surface, 24);
+        midiInputs->onHeightChanged = [this] { fitHeight(); };
+        addAndMakeVisible (*midiInputs);
+    }
     heading.setFont (Look::condensed (17.0f));
     heading.setColour (juce::Label::textColourId, Look::amber);
    #if ! JUCE_ANDROID
@@ -43,7 +49,13 @@ AudioPanel::AudioPanel (DeviceWatch& w, juce::PropertiesFile& s)
     type.onChange = [this] { fillDevices(); store(); };
     device.onChange = [this] { fillOutputs(); store(); };
     output.onChange = [this] { store(); };
-    setSize (560, 560 + backupHeight);
+    fitHeight();
+}
+
+void AudioPanel::fitHeight()
+{
+    setSize (560, 560 + midiHeight() + backupHeight);
+    resized();
 }
 
 AudioPanel::~AudioPanel()
@@ -130,12 +142,16 @@ void AudioPanel::paint (juce::Graphics& g)
     g.fillAll (Look::panel);
     g.setColour (Look::line);
     g.fillRect (0, getHeight() - backupHeight, getWidth(), 1);
+    if (midiInputs != nullptr)
+        g.fillRect (0, getHeight() - backupHeight - midiHeight(), getWidth(), 1);
 }
 
 void AudioPanel::resized()
 {
     auto r = getLocalBounds();
     auto bottom = r.removeFromBottom (backupHeight).reduced (16, 12);
+    if (midiInputs != nullptr)
+        midiInputs->setBounds (r.removeFromBottom (midiHeight()).reduced (16, 12));
     selector.setBounds (r);
     heading.setBounds (bottom.removeFromTop (26));
     auto row = [&bottom] (juce::Label& l, juce::ComboBox& c)

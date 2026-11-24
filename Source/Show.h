@@ -25,7 +25,8 @@ enum class Transition { stop = 0, playNext, crossfade, loopUntil, wait };
 
 struct PlaylistEntry
 {
-    int cueId = -1;                         // the button it plays (its file, trims, output, level...)
+    int cueId = -1;                         // the button it plays (its file, trims, output, level...), or a song of its
+                                            // own (Show::songBase and up: a file dropped on a preshow playlist)
     Transition transition = Transition::stop;
     double crossfadeSeconds = 1.0;         // crossfade time; for Loop until GO: how long Fade to next takes
     double waitSeconds = 5.0;              // Wait: silence after the song before the next one starts
@@ -38,9 +39,17 @@ struct Playlist
 {
     juce::String name;
     std::vector<PlaylistEntry> entries;
+    bool preshow = false;                   // Preshow music: files dropped on it stay off the buttons, and GO picks up a
+                                            // song that was stopped part way from where it stopped
     // runtime only
     int uid = 0;                            // stays the same while playlists come and go
     int nextUid = 0, onAirUid = 0;          // its entries GO plays next / that's playing (0 = none)
+    int resumeUid = 0;                      // preshow: the entry that was stopped part way (0 = none); GO resumes it
+    double resumeSeconds = 0.0;             // ...from here (seconds into what plays)
+    int trackUid = 0;                       // preshow, while it plays: its newest song, where it is, and whether that
+    double trackSeconds = 0.0;              // song was stopped (rather than ending by itself)
+    bool trackStopped = false;
+    double trackLeft = 0.0;                 // (a song cut off with no fade is never seen stopping: still had time left)
 
     juce::String displayName (int index) const { return name.isEmpty() ? "Playlist " + juce::String (index + 1) : name; }
 };
@@ -85,6 +94,8 @@ struct ScheduleItem
 struct Show
 {
     static constexpr int columns = 6, rows = 4, cuesPerBank = columns * rows;
+    /** Ids from here on are playlist songs (Show::songs), not buttons. */
+    static constexpr int songBase = 100000;
 
     struct Bank
     {
@@ -94,6 +105,7 @@ struct Show
 
     std::vector<Bank> banks;
     std::vector<Playlist> playlists;
+    std::vector<Cue> songs;          // files dropped on preshow playlists, on no button (id songBase + index; empty = free)
     std::vector<RunRow> run;
     std::vector<ScheduleItem> schedule;
     PlaybackMode playbackMode = PlaybackMode::oneAtATime;
@@ -106,9 +118,12 @@ struct Show
     static int bankOf (int id) { return id / cuesPerBank; }
     static int slotOf (int id) { return id % cuesPerBank; }
 
-    bool isValid (int id) const { return id >= 0 && bankOf (id) < (int) banks.size(); }
-    Cue& cue (int id) { return banks[(size_t) bankOf (id)].cues[(size_t) slotOf (id)]; }
-    const Cue& cue (int id) const { return banks[(size_t) bankOf (id)].cues[(size_t) slotOf (id)]; }
+    static bool isSong (int id) { return id >= songBase; }
+    bool isValid (int id) const { return isSong (id) ? id - songBase < (int) songs.size() : id >= 0 && bankOf (id) < (int) banks.size(); }
+    Cue& cue (int id) { return isSong (id) ? songs[(size_t) (id - songBase)] : banks[(size_t) bankOf (id)].cues[(size_t) slotOf (id)]; }
+    const Cue& cue (int id) const { return isSong (id) ? songs[(size_t) (id - songBase)] : banks[(size_t) bankOf (id)].cues[(size_t) slotOf (id)]; }
+    /** Every button, then every playlist song (empty ones too). */
+    std::vector<int> allCueIds() const;
 
     juce::var toVar() const;
     bool fromVar (const juce::var& v);
@@ -261,6 +276,14 @@ public:
     void renamePlaylist (int index, const juce::String& name);
 
     void addToPlaylist (int playlist, int cueId, int insertAt = -1);
+    /** Puts an audio file into the playlist as a song of its own, on no button (preshow playlists). It's copied into
+        the Audio folder like a file put on a button. */
+    void addSongToPlaylist (int playlist, const juce::File& file, int insertAt = -1);
+    /** Preshow music on / off for a playlist (saved in the show). */
+    void setPreshow (int playlist, bool on);
+    /** Preshow: the entry GO picks up part way (-1 = none) and where in it. */
+    int getResumeEntry (int playlist) const;
+    double getResumeSeconds (int playlist) const;
     void removeEntry (int playlist, int index);
     void moveEntry (int playlist, int from, int to);
     void setTransition (int playlist, int index, Transition t, double crossfadeSeconds);
@@ -304,7 +327,9 @@ public:
     /** Fade to next: crossfades from what the playlist is playing into its next entry now, over the playing
         entry's crossfade time. */
     void fadeToNext (int playlist);
-    void playEntry (int playlist, int index, double fadeInSeconds = 0.0);
+    void playEntry (int playlist, int index, double fadeInSeconds = 0.0, double fromSeconds = 0.0);
+    /** How long a preshow song fades back in when GO picks it up part way. */
+    static constexpr double resumeFadeSeconds = 1.0;
     /** True while one of the playlist's songs loops until GO. */
     bool isLoopingUntilGo (int playlist) const;
 
@@ -374,6 +399,10 @@ private:
     int newUid() { return ++lastUid; }
     void assignUids();
     void queueFollow (int tag);
+    /** A playlist song no playlist uses any more: its audio is let go and its place freed. */
+    void dropUnusedSong (int id);
+    /** GO / Fade to next on a preshow playlist with a song to pick up: plays it from where it stopped. */
+    bool resume (int playlist);
     void requeueFollows();
     bool makePlan (const PlaylistEntry& entry, int tag, PlayPlan& plan);
     double fadeSecondsFor (int tag);

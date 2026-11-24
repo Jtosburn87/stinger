@@ -10,6 +10,11 @@ ControlSurface::ControlSurface (ShowController& c, juce::PropertiesFile& s) : co
     levels.playing = settings.getIntValue ("fbPlaying", 127);
     levels.next = settings.getIntValue ("fbNext", 64);
     levels.loaded = settings.getIntValue ("fbLoaded", 0);
+    allInputs = settings.getBoolValue ("midiInputsAll", true);
+    if (auto* list = juce::JSON::parse (settings.getValue ("midiInputsOn")).getArray())
+        for (auto& v : *list)
+            if (v["identifier"].toString().isNotEmpty() || v["name"].toString().isNotEmpty())
+                tickedInputs.push_back ({ v["identifier"].toString(), v["name"].toString() });
 
     hotkeys.onKey = [this] (const juce::KeyPress& key) { handleKey (key); };
     controller.addChangeListener (this);
@@ -37,6 +42,16 @@ void ControlSurface::save()
     settings.setValue ("fbPlaying", levels.playing);
     settings.setValue ("fbNext", levels.next);
     settings.setValue ("fbLoaded", levels.loaded);
+    settings.setValue ("midiInputsAll", allInputs);
+    juce::Array<juce::var> ticked;
+    for (auto& t : tickedInputs)
+    {
+        auto* o = new juce::DynamicObject();
+        o->setProperty ("identifier", t.identifier);
+        o->setProperty ("name", t.name);
+        ticked.add (juce::var (o));
+    }
+    settings.setValue ("midiInputsOn", juce::JSON::toString (juce::var (ticked), true));
     settings.saveIfNeeded();
 }
 
@@ -204,21 +219,29 @@ void ControlSurface::assign (juce::String target, const juce::KeyPress* key, con
 void ControlSurface::refreshInputs()
 {
     const auto available = juce::MidiInput::getAvailableDevices();
-    // close inputs that went away
+    juce::StringArray ids;
+    for (auto& d : available)
+        ids.add (d.identifier + "|" + d.name);
+    bool changed = ids != lastAvailable;
+    lastAvailable = ids;
+
+    auto wanted = [&] (const juce::MidiDeviceInfo& d) { return allInputs || isTicked (d.identifier, d.name); };
+    // close inputs that went away or were unticked
+    const auto before = inputs.size();
     inputs.erase (std::remove_if (inputs.begin(), inputs.end(), [&] (auto& in)
     {
         for (auto& d : available)
-            if (d.identifier == in->getIdentifier())
+            if (d.identifier == in->getIdentifier() && wanted (d))
                 return false;
         in->stop();
         return true;
     }), inputs.end());
-    // open new ones (a Bluetooth footswitch that just connected, a controller plugged in...)
-    bool changed = false;
+    changed = changed || inputs.size() != before;
+    // open new ones (a Bluetooth footswitch that just connected, a controller plugged in, one just ticked...)
     for (auto& d : available)
     {
         const bool open = std::any_of (inputs.begin(), inputs.end(), [&] (auto& in) { return in->getIdentifier() == d.identifier; });
-        if (open)
+        if (open || ! wanted (d))
             continue;
         if (auto in = juce::MidiInput::openDevice (d.identifier, this))
         {
@@ -237,6 +260,62 @@ juce::StringArray ControlSurface::getInputNames() const
     for (auto& in : inputs)
         names.add (in->getName());
     return names;
+}
+
+bool ControlSurface::isTicked (const juce::String& identifier, const juce::String& name) const
+{
+    // the identifier first; a device that comes back with a new one (another USB port, re-paired) by its name
+    for (auto& t : tickedInputs)
+        if (t.identifier.isNotEmpty() && t.identifier == identifier)
+            return true;
+    for (auto& t : tickedInputs)
+        if (t.name.isNotEmpty() && t.name == name)
+            return true;
+    return false;
+}
+
+std::vector<ControlSurface::InputChoice> ControlSurface::getInputChoices() const
+{
+    std::vector<InputChoice> list;
+    for (auto& d : juce::MidiInput::getAvailableDevices())
+        list.push_back ({ d.name, d.identifier, true, allInputs || isTicked (d.identifier, d.name) });
+    if (! allInputs)
+        for (auto& t : tickedInputs)
+            if (std::none_of (list.begin(), list.end(), [&] (auto& c) { return c.identifier == t.identifier || c.name == t.name; }))
+                list.push_back ({ t.name, t.identifier, false, true });
+    return list;
+}
+
+void ControlSurface::setAllInputs (bool on)
+{
+    if (on == allInputs)
+        return;
+    if (! on)
+    {
+        // nothing changes until something is unticked: every input there now starts ticked
+        tickedInputs.clear();
+        for (auto& d : juce::MidiInput::getAvailableDevices())
+            tickedInputs.push_back ({ d.identifier, d.name });
+    }
+    allInputs = on;
+    save();
+    refreshInputs();
+    sendChangeMessage();
+}
+
+void ControlSurface::setInputOn (const InputChoice& input, bool on)
+{
+    if (allInputs)
+        return;
+    tickedInputs.erase (std::remove_if (tickedInputs.begin(), tickedInputs.end(), [&] (auto& t)
+    {
+        return (t.identifier.isNotEmpty() && t.identifier == input.identifier) || (t.name.isNotEmpty() && t.name == input.name);
+    }), tickedInputs.end());
+    if (on)
+        tickedInputs.push_back ({ input.identifier, input.name });
+    save();
+    refreshInputs();
+    sendChangeMessage();
 }
 
 void ControlSurface::handleIncomingMidiMessage (juce::MidiInput* source, const juce::MidiMessage& m)

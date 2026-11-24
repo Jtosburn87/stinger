@@ -129,6 +129,7 @@ if(ANDROID)
         Source/GlobalHotkeys.cpp
         Source/ControlSurface.cpp
         Source/ControlsWindow.cpp
+        Source/MidiInputList.cpp
         Source/ImportPanel.cpp
         Source/Remote.cpp
         Source/ShowCheckPanel.cpp
@@ -149,6 +150,7 @@ else()
         Source/GlobalHotkeys.cpp
         Source/ControlSurface.cpp
         Source/ControlsWindow.cpp
+        Source/MidiInputList.cpp
         Source/ImportPanel.cpp
         Source/Remote.cpp
         Source/ShowCheckPanel.cpp

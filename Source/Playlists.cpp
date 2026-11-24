@@ -8,7 +8,8 @@ void ShowController::assignUids()
     for (auto& p : show.playlists)
     {
         p.uid = newUid();
-        p.nextUid = p.onAirUid = 0;
+        p.nextUid = p.onAirUid = p.resumeUid = p.trackUid = 0;
+        p.trackStopped = false;
         for (auto& e : p.entries)
             e.uid = newUid();
     }
@@ -49,7 +50,10 @@ void ShowController::removePlaylist (int index)
 {
     if (index < 0 || index >= (int) show.playlists.size())
         return;
+    const auto gone = show.playlists[(size_t) index].entries;
     show.playlists.erase (show.playlists.begin() + index);
+    for (auto& e : gone)
+        dropUnusedSong (e.cueId);
     for (auto& r : show.run)
         r.playlist = r.playlist == index ? -1 : r.playlist > index ? r.playlist - 1 : r.playlist;
     if (show.playlists.empty())
@@ -125,6 +129,71 @@ void ShowController::addToPlaylist (int playlist, int cueId, int insertAt)
     sendChangeMessage();
 }
 
+void ShowController::addSongToPlaylist (int playlist, const juce::File& original, int insertAt)
+{
+    if (playlistAt (playlist) == nullptr || ! original.existsAsFile())
+        return;
+    Cue c;
+    c.file = importFile (original);
+    c.name = original.getFileNameWithoutExtension();
+    show.songs.push_back (c);   // a new place every time: a removed song can still be playing from its old one
+    const int id = Show::songBase + (int) show.songs.size() - 1;
+    loadAudio (id);
+    addToPlaylist (playlist, id, insertAt);
+}
+
+void ShowController::dropUnusedSong (int id)
+{
+    if (! Show::isSong (id) || ! show.isValid (id) || show.cue (id).isEmpty())
+        return;
+    for (auto& p : show.playlists)
+        for (auto& e : p.entries)
+            if (e.cueId == id)
+                return;
+    // left playing if it is (the engine keeps retired audio until it's done with it)
+    show.cue (id) = Cue();
+    if (auto it = media.find (id); it != media.end())
+    {
+        retire (it->second);
+        media.erase (it);
+    }
+    errors.erase (id);
+    loading.erase (id);
+    dirty = true;
+}
+
+void ShowController::setPreshow (int playlist, bool on)
+{
+    auto* p = playlistAt (playlist);
+    if (p == nullptr || p->preshow == on)
+        return;
+    p->preshow = on;
+    p->resumeUid = p->trackUid = 0;
+    p->trackStopped = false;
+    dirty = true;
+    sendChangeMessage();
+}
+
+int ShowController::getResumeEntry (int playlist) const
+{
+    auto* p = playlistAt (playlist);
+    return p == nullptr || ! p->preshow ? -1 : indexOfUid (playlist, p->resumeUid);
+}
+
+double ShowController::getResumeSeconds (int playlist) const
+{
+    return getResumeEntry (playlist) >= 0 ? show.playlists[(size_t) playlist].resumeSeconds : 0.0;
+}
+
+bool ShowController::resume (int playlist)
+{
+    const int index = getResumeEntry (playlist);
+    if (index < 0)
+        return false;
+    playEntry (playlist, index, resumeFadeSeconds, getResumeSeconds (playlist));
+    return true;
+}
+
 void ShowController::removeEntry (int playlist, int index)
 {
     auto* p = playlistAt (playlist);
@@ -132,7 +201,9 @@ void ShowController::removeEntry (int playlist, int index)
         return;
     if (p->entries[(size_t) index].uid == p->nextUid)
         p->nextUid = index + 1 < (int) p->entries.size() ? p->entries[(size_t) index + 1].uid : 0;
+    const int cueId = p->entries[(size_t) index].cueId;
     p->entries.erase (p->entries.begin() + index);
+    dropUnusedSong (cueId);
     dirty = true;
     requeueFollows();
     sendChangeMessage();
@@ -179,6 +250,8 @@ int ShowController::getNextEntry (int playlist) const
     auto* p = playlistAt (playlist);
     if (p == nullptr)
         return -1;
+    if (const int r = getResumeEntry (playlist); r >= 0)
+        return r;   // preshow: the song that was stopped part way
     if (p->nextUid != 0)
         return indexOfUid (playlist, p->nextUid);
     if (p->onAirUid == 0 && ! p->entries.empty())
@@ -192,6 +265,7 @@ void ShowController::setNextEntry (int playlist, int index)
     if (p != nullptr && index >= 0 && index < (int) p->entries.size())
     {
         p->nextUid = p->entries[(size_t) index].uid;
+        p->resumeUid = 0;   // picked by hand: it plays from the top
         sendChangeMessage();
     }
 }
@@ -256,6 +330,8 @@ void ShowController::go (int playlist)
         sendChangeMessage();
         return;
     }
+    if (resume (playlist))
+        return;
     const int index = getNextEntry (playlist);
     if (index >= 0)
         playEntry (playlist, index);
@@ -264,6 +340,8 @@ void ShowController::go (int playlist)
 void ShowController::fadeToNext (int playlist)
 {
     goPressed();
+    if (resume (playlist))
+        return;
     const int index = getNextEntry (playlist);
     if (index < 0)
         return;
@@ -274,12 +352,13 @@ void ShowController::fadeToNext (int playlist)
     playEntry (playlist, index, seconds);
 }
 
-void ShowController::playEntry (int playlist, int index, double fadeInSeconds)
+void ShowController::playEntry (int playlist, int index, double fadeInSeconds, double fromSeconds)
 {
     auto* p = playlistAt (playlist);
     if (p == nullptr || index < 0 || index >= (int) p->entries.size())
         return;
     const auto entry = p->entries[(size_t) index];
+    p->resumeUid = 0;   // whatever plays now is where a later resume comes from
 
     // the playlist moves on: songs it started fade out
     const double sr = engine.getSampleRate();
@@ -296,6 +375,8 @@ void ShowController::playEntry (int playlist, int index, double fadeInSeconds)
         return;
     }
     plan.entryFade = (juce::int64) (std::max (0.0, fadeInSeconds) * sr);
+    if (fromSeconds > 0.0)
+        plan.startAt = juce::jlimit<juce::int64> (0, std::max<juce::int64> (0, plan.length - 1), (juce::int64) (fromSeconds * sr));
     plan.takeOver = show.playbackMode;   // takes over from buttons and other playlists; its own songs fade as above
     tagUid[tag] = entry.uid;
     engine.play (plan);
@@ -358,6 +439,20 @@ void ShowController::updatePlaylist()
         if (it->tag == 0)
             continue;
         playing.insert (it->tag);
+        // preshow: keep track of where its newest song is, and whether it was stopped (oldest first, so the newest wins)
+        if (auto t = tagUid.find (it->tag); t != tagUid.end() && ! it->preview && ! it->waiting)
+            if (auto* p = playlistAt (playlistOfTag (it->tag)); p != nullptr && p->preshow)
+            {
+                if (! it->stopping)
+                {
+                    p->trackUid = t->second;
+                    p->trackSeconds = it->position;
+                    p->trackLeft = it->length - it->position;
+                    p->trackStopped = false;
+                }
+                else if (t->second == p->trackUid)
+                    p->trackStopped = true;
+            }
         if (seen.insert (it->tag).second)
         {
             // a linked song started by itself: it's on air now, and the one after it is next
@@ -402,6 +497,15 @@ void ShowController::updatePlaylist()
             if (! on)
             {
                 p.onAirUid = 0;
+                // preshow: stopped part way (Stop all, a button taking over...) = GO picks it up there; a song that
+                // ended by itself doesn't
+                if (p.preshow && p.trackUid != 0 && (p.trackStopped || p.trackLeft > 0.5))
+                {
+                    p.resumeUid = p.trackUid;
+                    p.resumeSeconds = p.trackSeconds;
+                }
+                p.trackUid = 0;
+                p.trackStopped = false;
                 changed = true;
             }
         }

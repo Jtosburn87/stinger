@@ -48,8 +48,10 @@ public:
         else if (const juce::File show (settings.getValue ("lastShow")); show.existsAsFile())
             controller->openShow (show, error);
 
-        root = std::make_unique<MobileRoot> (*controller, settings);
-        window = std::make_unique<Window> (root.get());
+        // one MIDI / key listener for the phone pages and DeX alike: each MIDI device is opened once
+        surface = std::make_unique<ControlSurface> (*controller, settings);
+        root = std::make_unique<MobileRoot> (*controller, settings, *surface);
+        window = std::make_unique<Window> (root.get(), surface.get());
 
         // the keys (the DeX deck page, a Stream Deck) work from the start: on the phone pages until DeX takes over
         deck = std::make_unique<DexDeck> (*controller);
@@ -74,18 +76,29 @@ public:
     /** The deck page's and the Stream Deck's keys act on the screen in charge. */
     void pointKeysAt (bool onDesktop)
     {
-        if (deck == nullptr)
-            return;
         if (onDesktop && desktop != nullptr)
         {
             auto& server = desktop->getStreamDeck();
-            deck->setTarget (server.perform, server.shownBank);
+            if (deck != nullptr)
+                deck->setTarget (server.perform, server.shownBank);
+            if (surface != nullptr)
+            {
+                surface->perform = desktopPerform;
+                surface->shownBank = desktopBank;
+            }
             return;
         }
         auto& page = root->getMainPage();
         juce::Component::SafePointer<MobileMainPage> safe (&page);
-        deck->setTarget ([safe] (const juce::String& action) { if (safe != nullptr) safe->perform (action); },
-                         [safe] { return safe != nullptr ? safe->getBank() : 0; });
+        auto perform = [safe] (const juce::String& action) { if (safe != nullptr) safe->perform (action); };
+        auto bank = [safe] { return safe != nullptr ? safe->getBank() : 0; };
+        if (deck != nullptr)
+            deck->setTarget (perform, bank);
+        if (surface != nullptr)
+        {
+            surface->perform = perform;
+            surface->shownBank = bank;
+        }
     }
 
     /** Swaps the window's content. The window is made again so it takes the new screen's size and density. */
@@ -95,13 +108,15 @@ public:
             return;
         if (on && desktop == nullptr)
         {
-            desktop = std::make_unique<MainComponent> (*controller, *properties.getUserSettings());
+            desktop = std::make_unique<MainComponent> (*controller, *properties.getUserSettings(), surface.get());
+            desktopPerform = surface->perform;   // the desktop pointed the shared listener at itself
+            desktopBank = surface->shownBank;
             deck->setLayouts (&desktop->getRemote());
         }
         pointKeysAt (on);
         const_cast<juce::Displays&> (juce::Desktop::getInstance().getDisplays()).refresh();
         window = nullptr;
-        window = std::make_unique<Window> (on ? static_cast<juce::Component*> (desktop.get()) : root.get());
+        window = std::make_unique<Window> (on ? static_cast<juce::Component*> (desktop.get()) : root.get(), on ? nullptr : surface.get());
         if (on)
         {
             juce::Component::SafePointer<juce::Component> safe (desktop.get());
@@ -118,8 +133,16 @@ public:
         DexBridge::setDeckUrl ({});
         streamDeck = nullptr;
         deck = nullptr;   // before the screens its keys act on
+        if (surface != nullptr)
+        {
+            surface->perform = nullptr;
+            surface->shownBank = nullptr;
+        }
+        desktopPerform = nullptr;
+        desktopBank = nullptr;
         desktop = nullptr;
         root = nullptr;
+        surface = nullptr;   // after the pages that show it
         if (controller != nullptr)
             controller->setAutosave (nullptr);
         autosave = nullptr;
@@ -152,8 +175,9 @@ private:
     class Window : public juce::DocumentWindow
     {
     public:
-        explicit Window (juce::Component* content)
-            : DocumentWindow ("Stinger", Look::ground, 0)
+        /** keys: the phone pages' MIDI / key listener (keys nothing on the page used); DeX's screen handles its own. */
+        Window (juce::Component* content, ControlSurface* keys)
+            : DocumentWindow ("Stinger", Look::ground, 0), keySurface (keys)
         {
             setUsingNativeTitleBar (true);
             setTitleBarHeight (0);   // the app's own window: Android (or DeX) frames it, JUCE draws no title bar
@@ -167,8 +191,13 @@ private:
         bool keyPressed (const juce::KeyPress& key) override
         {
             auto* content = getContentComponent();
-            return content != nullptr && content->keyPressed (key);
+            if (content != nullptr && content->keyPressed (key))
+                return true;
+            return keySurface != nullptr && keySurface->handleKey (key);
         }
+
+    private:
+        ControlSurface* keySurface;
     };
 
     Look::LookAndFeel lookAndFeel;
@@ -177,6 +206,9 @@ private:
     std::unique_ptr<Autosave> autosave;
     std::unique_ptr<ShowController> controller;
     std::unique_ptr<PluginHost> pluginHost;
+    std::unique_ptr<ControlSurface> surface;   // MIDI and keys: phone pages or DeX, whichever is showing
+    std::function<void (const juce::String&)> desktopPerform;
+    std::function<int()> desktopBank;
     std::unique_ptr<MobileRoot> root;
     std::unique_ptr<MainComponent> desktop;   // made the first time DeX shows it, then kept
     std::unique_ptr<DexDeck> deck;            // the key server: the DeX deck page and a Stream Deck, from the start

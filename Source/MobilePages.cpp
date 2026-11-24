@@ -186,6 +186,26 @@ MobileEditorPage::MobileEditorPage (ShowController& c) : controller (c), wavefor
     add (loop);
     add (fadeOthers);
 
+    midiBinding.setFont (Look::mono (14.0f));
+    midiBinding.setColour (juce::Label::textColourId, Look::textDim);
+    add (midiBinding);
+    flat (midiLearn);
+    midiLearn.setClickingTogglesState (true);
+    midiLearn.onClick = [this]
+    {
+        if (surface == nullptr)
+            return;
+        if (midiLearn.getToggleState())
+            surface->learn ("cue:" + juce::String (cueId));
+        else
+            surface->cancelLearn();
+        refresh();
+    };
+    add (midiLearn);
+    flat (midiClear);
+    midiClear.onClick = [this] { if (auto* q = cue()) { q->hotkey.clear(); q->midi = {}; changed(); refresh(); } };
+    add (midiClear);
+
     // ---- effects ----
     auto setupEffect = [this, &add] (EffectSection& section, StockFx::Kind kind)
     {
@@ -259,6 +279,23 @@ MobileEditorPage::MobileEditorPage (ShowController& c) : controller (c), wavefor
 MobileEditorPage::~MobileEditorPage()
 {
     controller.removeChangeListener (this);
+    setControlSurface (nullptr);
+}
+
+void MobileEditorPage::setControlSurface (ControlSurface* s)
+{
+    if (surface != nullptr)
+        surface->removeChangeListener (this);
+    surface = s;
+    if (surface != nullptr)
+        surface->addChangeListener (this);
+}
+
+void MobileEditorPage::visibilityChanged()
+{
+    // leaving the page stops a Learn that's waiting for this button
+    if (! isVisible() && surface != nullptr && surface->learning().startsWith ("cue:"))
+        surface->cancelLearn();
 }
 
 Cue* MobileEditorPage::cue()
@@ -374,6 +411,7 @@ void MobileEditorPage::refresh()
     title.setText (has ? q->name : juce::String ("Empty button"), juce::dontSendNotification);
     chooseButton.setButtonText (has ? "Replace audio" : "Choose audio");
     for (auto* c : std::initializer_list<juce::Component*> { &name, &colourButton, &clearButton, &output, &level, &pan, &fadeIn, &fadeOut, &stopFade, &loop, &fadeOthers,
+                                                            &midiLearn, &midiClear,
                                                             &eq.power, &compressor.power, &limiter.power })
         c->setEnabled (has);
 
@@ -401,6 +439,16 @@ void MobileEditorPage::refresh()
         fadeOthers.setToggleState (q->fadeOthers, juce::dontSendNotification);
         for (auto* row : { &level, &pan, &fadeIn, &fadeOut, &stopFade })
             row->slider.updateText();
+
+        const auto action = "cue:" + juce::String (cueId);
+        const bool learningThis = surface != nullptr && surface->learning() == action;
+        midiLearn.setToggleState (learningThis, juce::dontSendNotification);
+        const auto text = surface != nullptr ? ControlSurface::describe (surface->bindingFor (action)) : juce::String();
+        midiBinding.setText (learningThis ? juce::String ("Play the MIDI note / CC / footswitch...")
+                                          : "MIDI / key: " + (text.isNotEmpty() ? text : juce::String ("none")),
+                             juce::dontSendNotification);
+        midiBinding.setColour (juce::Label::textColourId, learningThis ? Look::amber : Look::textDim);
+        midiClear.setEnabled (has && (q->midi.isSet() || q->hotkey.isNotEmpty()));
     }
 
     refreshEffect (eq);
@@ -514,6 +562,15 @@ void MobileEditorPage::layoutSettings()
         fadeOthers.setBounds (row);
         y += 44;
     }
+    {
+        auto row = juce::Rectangle<int> (12, y, width - 24, 42);
+        midiClear.setBounds (row.removeFromRight (80));
+        row.removeFromRight (8);
+        midiLearn.setBounds (row.removeFromRight (90));
+        row.removeFromRight (8);
+        midiBinding.setBounds (row);
+        y += 46;
+    }
 
     heading (effectsHeading);
     auto rowsOf = [&] (EffectSection& section)
@@ -565,9 +622,12 @@ void MobileEditorPage::resized()
 
 // ---------------------------------------------------------------------------------------------
 
-MobileAudioPage::MobileAudioPage (ShowController& controller)
-    : selector (controller.getEngine().getDeviceManager(), 0, 0, 2, PlaybackEngine::maxOutputs, false, false, true, false)
+MobileAudioPage::MobileAudioPage (ShowController& controller, ControlSurface& surface)
+    : selector (controller.getEngine().getDeviceManager(), 0, 0, 2, PlaybackEngine::maxOutputs, false, false, true, false),
+      midiInputs (surface, 40)
 {
+    midiInputs.onHeightChanged = [this] { resized(); };
+    addAndMakeVisible (midiInputs);
     flat (backButton);
     backButton.onClick = [this] { if (onBack) onBack(); };
     addAndMakeVisible (backButton);
@@ -591,7 +651,46 @@ void MobileAudioPage::resized()
     backButton.setBounds (bar.removeFromLeft (84));
     bar.removeFromLeft (10);
     title.setBounds (bar);
-    selector.setBounds (r.reduced (8));
+    r.reduce (8, 8);
+    midiInputs.setBounds (r.removeFromBottom (juce::jmin (midiInputs.getIdealHeight(), r.getHeight() / 2)));
+    r.removeFromBottom (8);
+    selector.setBounds (r);
+}
+
+// ---------------------------------------------------------------------------------------------
+
+MobileControlsPage::MobileControlsPage (ControlSurface& surface) : panel (surface, nullptr, true)
+{
+    flat (backButton);
+    backButton.onClick = [this] { if (onBack) onBack(); };
+    addAndMakeVisible (backButton);
+    title.setText ("MIDI and keys", juce::dontSendNotification);
+    title.setFont (Look::condensed (20.0f));
+    addAndMakeVisible (title);
+    panel.onHeightChanged = [this] { resized(); };
+    viewport.setViewedComponent (&panel, false);
+    viewport.setScrollBarsShown (true, false);
+    viewport.setScrollOnDragMode (juce::Viewport::ScrollOnDragMode::all);
+    addAndMakeVisible (viewport);
+}
+
+void MobileControlsPage::paint (juce::Graphics& g)
+{
+    g.fillAll (Look::panel);
+    g.setColour (Look::panel.brighter (0.06f));
+    g.fillRect (getLocalBounds().removeFromTop (barHeight));
+}
+
+void MobileControlsPage::resized()
+{
+    auto r = getLocalBounds();
+    auto bar = r.removeFromTop (barHeight).reduced (8, 7);
+    backButton.setBounds (bar.removeFromLeft (84));
+    bar.removeFromLeft (10);
+    title.setBounds (bar);
+    viewport.setBounds (r);
+    const int w = viewport.getMaximumVisibleWidth();
+    panel.setSize (w, panel.getIdealHeight (w));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -708,7 +807,13 @@ void MobileMainPage::perform (const juce::String& action)
 {
     auto& show = controller.getShow();
     const int list = controller.getSelectedPlaylist();
-    if (action.startsWith ("slot"))
+    if (action.startsWith ("cue:"))
+    {
+        const int id = action.fromFirstOccurrenceOf ("cue:", false, false).getIntValue();
+        if (show.isValid (id) && ! show.cue (id).isEmpty())
+            controller.trigger (id);
+    }
+    else if (action.startsWith ("slot"))
     {
         const int id = Show::cueId (bank, action.fromFirstOccurrenceOf ("slot", false, false).getIntValue() - 1);
         if (show.isValid (id) && ! show.cue (id).isEmpty())
@@ -1035,14 +1140,19 @@ void MobileMainPage::showMenu()
     menu.addItem ("Reset black buttons", controller.anySpent(), false, [this] { controller.resetColours(); });
     menu.addSeparator();
     menu.addItem ("Audio...", [this] { if (onOpenAudio) onOpenAudio(); });
+    menu.addItem ("MIDI and keys...", [this] { if (onOpenControls) onOpenControls(); });
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (menuButton).withMinimumWidth (220).withStandardItemHeight (44));
 }
 
 // ---------------------------------------------------------------------------------------------
 
-MobileRoot::MobileRoot (ShowController& controller, juce::PropertiesFile& settings)
-    : mainPage (controller, settings), editorPage (controller), audioPage (controller)
+MobileRoot::MobileRoot (ShowController& controller, juce::PropertiesFile& settings, ControlSurface& surface)
+    : mainPage (controller, settings), editorPage (controller), audioPage (controller, surface), controlsPage (surface)
 {
+    editorPage.setControlSurface (&surface);
+    addChildComponent (controlsPage);
+    controlsPage.onBack = [this] { show (mainPage); };
+    mainPage.onOpenControls = [this] { show (controlsPage); };
     addAndMakeVisible (mainPage);
     addChildComponent (editorPage);
     addChildComponent (audioPage);
@@ -1065,7 +1175,7 @@ MobileRoot::MobileRoot (ShowController& controller, juce::PropertiesFile& settin
 void MobileRoot::show (juce::Component& page)
 {
     juce::Component::unfocusAllComponents();   // takes the keyboard away with the page
-    for (auto* p : std::initializer_list<juce::Component*> { &mainPage, &editorPage, &audioPage })
+    for (auto* p : std::initializer_list<juce::Component*> { &mainPage, &editorPage, &audioPage, &controlsPage })
         p->setVisible (p == &page);
     if (! hinge.isEmpty())
         mainPage.setVisible (true);   // spanned: the buttons stay on their screen, the page covers the other
@@ -1073,7 +1183,7 @@ void MobileRoot::show (juce::Component& page)
 
 bool MobileRoot::goBack()
 {
-    if (! editorPage.isVisible() && ! audioPage.isVisible())
+    if (! editorPage.isVisible() && ! audioPage.isVisible() && ! controlsPage.isVisible())
         return false;
     show (mainPage);
     return true;
@@ -1090,7 +1200,7 @@ void MobileRoot::setHinge (juce::Rectangle<int> newHinge, bool across)
     hinge = newHinge;
     hingeAcross = across;
     // back on one screen: the page that was open on the first screen becomes the whole screen, as on any phone
-    if (hinge.isEmpty() && (editorPage.isVisible() || audioPage.isVisible()))
+    if (hinge.isEmpty() && (editorPage.isVisible() || audioPage.isVisible() || controlsPage.isVisible()))
         mainPage.setVisible (false);
     else if (! hinge.isEmpty())
         mainPage.setVisible (true);
@@ -1108,7 +1218,7 @@ void MobileRoot::resized()
     if (hinge.isEmpty() || (hingeAcross ? hinge.getBottom() > getHeight() : hinge.getRight() > getWidth()))
     {
         mainPage.setSplit ({}, {}, false);
-        for (auto* p : std::initializer_list<juce::Component*> { &mainPage, &editorPage, &audioPage })
+        for (auto* p : std::initializer_list<juce::Component*> { &mainPage, &editorPage, &audioPage, &controlsPage })
             p->setBounds (getLocalBounds());
         return;
     }

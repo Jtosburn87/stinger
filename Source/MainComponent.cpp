@@ -99,8 +99,11 @@ void MainComponent::showCredits()
     o.launchAsync();
 }
 
-MainComponent::MainComponent (ShowController& c, juce::PropertiesFile& s)
-    : controller (c), settings (s), surface (c, s), streamDeck (c), remote (c, s), grid (c), playlist (c), nowPlaying (c), cueSettings (c), deviceWatch (c), countdown (c, s), bigClock (c, s), scheduleStrip (c), osc (c), backupLink (c)
+MainComponent::MainComponent (ShowController& c, juce::PropertiesFile& s, ControlSurface* sharedSurface)
+    : controller (c), settings (s),
+      ownSurface (sharedSurface == nullptr ? std::make_unique<ControlSurface> (c, s) : nullptr),
+      surface (sharedSurface != nullptr ? *sharedSurface : *ownSurface),
+      streamDeck (c), remote (c, s), grid (c), playlist (c), nowPlaying (c), cueSettings (c), deviceWatch (c), countdown (c, s), bigClock (c, s), scheduleStrip (c), osc (c), backupLink (c)
 {
     addAndMakeVisible (grid);
     addAndMakeVisible (playlist);
@@ -855,7 +858,7 @@ void MainComponent::checkOnceLoaded()
 void MainComponent::showAudioSettings()
 {
     juce::DialogWindow::LaunchOptions o;
-    o.content.setOwned (new AudioPanel (deviceWatch, settings));
+    o.content.setOwned (new AudioPanel (deviceWatch, settings, &surface));
     o.dialogTitle = "Audio";
     o.dialogBackgroundColour = Look::panel;
     o.escapeKeyTriggersCloseButton = true;
@@ -993,7 +996,13 @@ juce::Image MainComponent::panelImage (const juce::String& name)
     }
     std::unique_ptr<juce::Component> panel;
     if (name == "audio")
-        panel = std::make_unique<AudioPanel> (deviceWatch, settings);
+        panel = std::make_unique<AudioPanel> (deviceWatch, settings, &surface);
+    else if (name == "midiphone")   // the phone Controls page's layout: touch sizes, a narrow screen
+    {
+        auto p = std::make_unique<ControlsPanel> (surface, nullptr, true);
+        p->setSize (400, p->getIdealHeight (400));
+        panel = std::move (p);
+    }
     else if (name == "osc")
         panel = std::make_unique<OscPanel> (osc, settings);
     else

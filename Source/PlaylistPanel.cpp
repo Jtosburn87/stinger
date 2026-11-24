@@ -27,6 +27,17 @@ namespace
         return c.getShow().cue (p->entries[(size_t) entry].cueId).name;
     }
 
+    /** What GO plays next: its name, and for a preshow song stopped part way, where it picks up. */
+    juce::String nextText (ShowController& c, int playlist, int entry)
+    {
+        auto name = entryName (c, playlist, entry);
+        if (entry >= 0 && entry == c.getResumeEntry (playlist))
+            name << " (resumes at " << CueGrid::formatTime (c.getResumeSeconds (playlist)) << ")";
+        return name;
+    }
+
+    const juce::String preshowMenuText = "Preshow music (dropped files stay off the buttons, GO resumes where it stopped)";
+
     const juce::String dash = juce::String::fromUTF8 ("\xe2\x80\x94");
 }
 
@@ -88,12 +99,15 @@ void PlaylistRows::paint (juce::Graphics& g)
     {
         g.setColour (Look::textFaint);
         g.setFont (Look::font (13.0f));
-        g.drawFittedText ("Empty playlist.\nTurn on EDIT and drag buttons here,\nright-click a button > Add to playlist,\nor drop audio files.",
+        g.drawFittedText (p != nullptr && p->preshow
+                              ? juce::String ("Empty preshow playlist.\nDrop audio files here (they stay off the buttons),\nor drag buttons here with EDIT on.")
+                              : juce::String ("Empty playlist.\nTurn on EDIT and drag buttons here,\nright-click a button > Add to playlist,\nor drop audio files."),
                           getLocalBounds().reduced (12).withHeight (80), juce::Justification::topLeft, 4);
     }
     else
     {
         const int onAir = controller.getOnAirEntry (index()), next = controller.getNextEntry (index());
+        const int resume = controller.getResumeEntry (index());
         auto& show = controller.getShow();
         for (int i = 0; i < (int) p->entries.size(); ++i)
         {
@@ -132,7 +146,7 @@ void PlaylistRows::paint (juce::Graphics& g)
 
             if (i == onAir || i == next)
             {
-                const juce::String tag = i == onAir ? "ON AIR" : "NEXT";
+                const juce::String tag = i == onAir ? "ON AIR" : i == resume ? "RESUME " + CueGrid::formatTime (controller.getResumeSeconds (index())) : "NEXT";
                 g.setFont (Look::font (10.0f, true));
                 const int w = (int) Look::textWidth (g.getCurrentFont(), tag) + 10;
                 auto t = in.removeFromRight (w).withSizeKeepingCentre (w, 16).toFloat();
@@ -143,7 +157,7 @@ void PlaylistRows::paint (juce::Graphics& g)
                 g.drawText (tag, t, juce::Justification::centred);
             }
 
-            if (cue != nullptr && ! cue->isEmpty())
+            if (cue != nullptr && ! cue->isEmpty() && ! Show::isSong (e.cueId))   // a button's color (a playlist song has none)
             {
                 g.setColour (Look::colourOf (*cue));
                 g.fillEllipse (in.getX() + 0.0f, (float) in.getCentreY() - 4.0f, 8.0f, 8.0f);
@@ -151,7 +165,9 @@ void PlaylistRows::paint (juce::Graphics& g)
             }
             g.setColour (cue != nullptr && ! cue->isEmpty() ? text : Look::textFaint);
             g.setFont (Look::font (14.0f));
-            g.drawText (cue != nullptr && ! cue->isEmpty() ? cue->name : juce::String ("(empty button)"), in.withTrimmedLeft (4),
+            g.drawText (cue != nullptr && ! cue->isEmpty() ? cue->name
+                                                           : juce::String (Show::isSong (e.cueId) ? "(missing song)" : "(empty button)"),
+                        in.withTrimmedLeft (4),
                         juce::Justification::centredLeft, true);
 
             // transition chip, joined to its row by a short line
@@ -364,6 +380,17 @@ void PlaylistRows::addFiles (ShowController& controller, int playlist, const juc
     std::sort (files.begin(), files.end(), [] (const juce::String& a, const juce::String& b)
                { return juce::File (a).getFileName().compareNatural (juce::File (b).getFileName()) < 0; });
     auto& show = controller.getShow();
+    if (auto* list = controller.playlistAt (playlist); list != nullptr && list->preshow)
+    {
+        // preshow: the files go into the playlist only, not onto buttons
+        for (auto& path : files)
+        {
+            controller.addSongToPlaylist (playlist, juce::File (path), at);
+            if (at >= 0)
+                ++at;
+        }
+        return;
+    }
     for (auto& path : files)
     {
         int free = -1;
@@ -433,7 +460,7 @@ void PlaylistView::refresh()
 {
     const int pl = index();
     const int n = controller.getNextEntry (pl);
-    juce::String next = "Next: " + (n >= 0 ? entryName (controller, pl, n) : dash);
+    juce::String next = "Next: " + (n >= 0 ? nextText (controller, pl, n) : dash);
     shownLooping = controller.isLoopingUntilGo (pl);
     if (shownLooping)
         next = juce::String::fromUTF8 ("\xe2\x86\xbb Looping \xe2\x80\x94 GO finishes it, FADE TO NEXT fades");
@@ -473,6 +500,9 @@ void PlaylistView::resized()
     menuButton.onClick = [this]
     {
         juce::PopupMenu m;
+        auto* list = controller.playlistAt (index());
+        m.addItem (3, preshowMenuText, true, list != nullptr && list->preshow);
+        m.addSeparator();
         m.addItem (1, "Rename playlist...");
         m.addItem (2, "Delete playlist", controller.getShow().playlists.size() > 1);
         m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (menuButton),
@@ -482,6 +512,12 @@ void PlaylistView::resized()
                 return;
             auto& c = safe->controller;
             const int pl = safe->index();
+            if (result == 3)
+            {
+                if (auto* l = c.playlistAt (pl))
+                    c.setPreshow (pl, ! l->preshow);
+                return;
+            }
             if (result == 2)
             {
                 c.removePlaylist (pl);   // its window closes with it
@@ -544,6 +580,18 @@ public:
         menuButton.setWantsKeyboardFocus (false);
         menuButton.onClick = [this] { panel.showMenu (index(), &menuButton); };
         addAndMakeVisible (menuButton);
+
+        preshowButton.setTooltip ("Preshow music: audio files dropped here stay off the buttons, and GO picks up a song "
+                                  "that was stopped part way from where it stopped");
+        preshowButton.setWantsKeyboardFocus (false);
+        preshowButton.setColour (juce::TextButton::buttonOnColourId, Look::amber);
+        preshowButton.setColour (juce::TextButton::textColourOnId, juce::Colour (0xff1a1206));
+        preshowButton.onClick = [this]
+        {
+            if (auto* p = controller.playlistAt (index()))
+                controller.setPreshow (index(), ! p->preshow);
+        };
+        addAndMakeVisible (preshowButton);
     }
 
     const int uid;
@@ -558,9 +606,10 @@ public:
         const int next = controller.getNextEntry (pl), onAir = controller.getOnAirEntry (pl);
         auto* p = controller.playlistAt (pl);
         const auto state = juce::String (pl) + "|" + (p != nullptr ? p->displayName (pl) + "|" + juce::String ((int) p->entries.size()) : juce::String())
-                         + "|" + juce::String (next) + entryName (controller, pl, next) + "|" + juce::String (onAir) + entryName (controller, pl, onAir)
-                         + "|" + juce::String ((int) looping) + juce::String ((int) (pl == controller.getSelectedPlaylist()));
+                         + "|" + juce::String (next) + nextText (controller, pl, next) + "|" + juce::String (onAir) + entryName (controller, pl, onAir)
+                         + "|" + juce::String ((int) (p != nullptr && p->preshow)) + juce::String ((int) looping) + juce::String ((int) (pl == controller.getSelectedPlaylist()));
         goButton.setEnabled (next >= 0 || looping);
+        preshowButton.setToggleState (p != nullptr && p->preshow, juce::dontSendNotification);
         if (state != shown)
         {
             shown = state;
@@ -582,7 +631,7 @@ public:
         g.drawRoundedRectangle (r, 7.0f, selected || dragOver ? 2.0f : 1.0f);
 
         auto in = getLocalBounds().reduced (10, 6);
-        auto head = in.removeFromTop (26).withTrimmedRight (64);
+        auto head = in.removeFromTop (26).withTrimmedRight (64 + preshowWidth + 4);
         g.setColour (selected ? Look::text : juce::Colour (0xffc9d0d8));
         g.setFont (Look::condensed (17.0f));
         const auto name = p->displayName (pl).toUpperCase();
@@ -591,8 +640,9 @@ public:
         g.setColour (Look::textFaint);
         g.setFont (Look::font (11.0f));
         const int n = (int) p->entries.size();
-        g.drawText (juce::String::fromUTF8 ("  \xc2\xb7  ") + juce::String (n) + (n == 1 ? " song" : " songs"), head,
-                    juce::Justification::centredLeft, true);
+        const auto count = juce::String::fromUTF8 ("  \xc2\xb7  ") + juce::String (n) + (n == 1 ? " song" : " songs");
+        if (Look::textWidth (g.getCurrentFont(), count) <= (float) head.getWidth())   // only whole (a long name leaves no room)
+            g.drawText (count, head, juce::Justification::centredLeft, false);
 
         in.removeFromTop (4);
         auto lines = in.withTrimmedRight (goWidth + 8);
@@ -619,9 +669,11 @@ public:
         if (controller.isLoopingUntilGo (pl))
             line ("NEXT", Look::goGreen, juce::Colours::white, juce::String::fromUTF8 ("\xe2\x86\xbb looping, GO finishes it"), Look::textDim);
         else if (next >= 0)
-            line ("NEXT", Look::goGreen, juce::Colours::white, entryName (controller, pl, next), Look::text);
+            line (next == controller.getResumeEntry (pl) ? "RESUME" : "NEXT", Look::goGreen, juce::Colours::white,
+                  nextText (controller, pl, next), Look::text);
         else
-            line ("NEXT", Look::raised, Look::textFaint, n == 0 ? juce::String ("drop buttons here") : dash, Look::textFaint);
+            line ("NEXT", Look::raised, Look::textFaint,
+                  n == 0 ? juce::String (p->preshow ? "drop audio files here" : "drop buttons here") : dash, Look::textFaint);
     }
 
     void resized() override
@@ -631,6 +683,8 @@ public:
         menuButton.setBounds (head.removeFromRight (28).reduced (0, 1));
         head.removeFromRight (4);
         windowButton.setBounds (head.removeFromRight (28).reduced (0, 1));
+        head.removeFromRight (4);
+        preshowButton.setBounds (head.removeFromRight (preshowWidth).reduced (0, 3));
         in.removeFromTop (4);
         goButton.setBounds (in.removeFromRight (goWidth));
     }
@@ -682,11 +736,11 @@ private:
         repaint();
     }
 
-    static constexpr int goWidth = 70;
+    static constexpr int goWidth = 70, preshowWidth = 64;
     PlaylistPanel& panel;
     ShowController& controller;
     juce::TextButton goButton { "GO" }, windowButton { juce::String::fromUTF8 ("\xe2\xa7\x89") },
-                     menuButton { juce::String::fromUTF8 ("\xe2\x8b\xaf") };
+                     menuButton { juce::String::fromUTF8 ("\xe2\x8b\xaf") }, preshowButton { "PRESHOW" };
     juce::String shown;
     bool dragOver = false;
 };
@@ -855,6 +909,8 @@ void PlaylistPanel::showMenu (int playlist, juce::Component* target)
     m.addItem (1, looping ? "GO (finish the loop)" : "GO", hasNext || looping);
     m.addItem (2, "Fade to next", hasNext);
     m.addSeparator();
+    m.addItem (7, preshowMenuText, true, p->preshow);
+    m.addSeparator();
     m.addItem (3, "Open in its own window");
     m.addItem (4, "Rename...");
     m.addItem (5, "Delete playlist", controller.getShow().playlists.size() > 1);
@@ -894,6 +950,7 @@ void PlaylistPanel::showMenu (int playlist, juce::Component* target)
                 break;
             }
             case 6: c.addPlaylist ({}); break;
+            case 7: c.setPreshow (pl, ! c.playlistAt (pl)->preshow); break;
             default: break;
         }
     });

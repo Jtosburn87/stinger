@@ -48,6 +48,21 @@ public:
     void resized() override
     {
         auto r = getLocalBounds().reduced (0, 3);
+        if (getWidth() < 560)
+        {
+            // narrow (a phone): name and binding on top, the buttons under them
+            auto top = r.removeFromTop (r.getHeight() / 2);
+            label.setBounds (top.removeFromLeft (top.getWidth() / 2));
+            binding.setBounds (top);
+            r.removeFromTop (2);
+            const int w = (r.getWidth() - 8) / 3;
+            learn.setBounds (r.removeFromLeft (w));
+            r.removeFromLeft (4);
+            clearKey.setBounds (r.removeFromLeft (w));
+            r.removeFromLeft (4);
+            clearMidi.setBounds (r);
+            return;
+        }
         clearMidi.setBounds (r.removeFromRight (78));
         r.removeFromRight (4);
         clearKey.setBounds (r.removeFromRight (72));
@@ -73,15 +88,18 @@ private:
 
 // ---------------------------------------------------------------------------------------------
 
-ControlsPanel::ControlsPanel (ControlSurface& s, StreamDeckServer* deck) : surface (s), streamDeck (deck)
+ControlsPanel::ControlsPanel (ControlSurface& s, StreamDeckServer* deck, bool isTouch)
+    : surface (s), streamDeck (deck), touch (isTouch), midiInputs (s, isTouch ? 40 : 24)
 {
+    midiInputs.onHeightChanged = [this] { resized(); if (onHeightChanged) onHeightChanged(); };
+    addAndMakeVisible (midiInputs);
     global.setWantsKeyboardFocus (false);
     global.onClick = [this] { surface.setGlobal (global.getToggleState()); };
    #if ! JUCE_ANDROID   // Android (Samsung DeX): no global keys, and no Stream Deck (it plugs into a computer)
     addAndMakeVisible (global);
    #endif
 
-    for (auto* l : { &refused, &inputs, &lastMidi, &deckStatus })
+    for (auto* l : { &refused, &lastMidi, &deckStatus })
     {
         l->setColour (juce::Label::textColourId, Look::textDim);
         l->setFont (Look::font (13.0f));
@@ -146,7 +164,7 @@ ControlsPanel::ControlsPanel (ControlSurface& s, StreamDeckServer* deck) : surfa
     refresh();
     setWantsKeyboardFocus (true);
     startTimerHz (4);
-    setSize (760, 720);
+    setSize (760, 780);
 }
 
 ControlsPanel::~ControlsPanel()
@@ -165,16 +183,6 @@ void ControlsPanel::refresh()
     refused.setText (refusedNames.isEmpty() ? juce::String()
                                             : "Windows wouldn't give Stinger these keys (another app has them): " + refusedNames.joinIntoString (", "),
                      juce::dontSendNotification);
-
-    const auto names = surface.getInputNames();
-   #if JUCE_ANDROID
-    const juce::String noMidi ("MIDI in: no devices found (plug in a USB MIDI device, or pair Bluetooth MIDI in Android's Settings first)");
-   #else
-    const juce::String noMidi ("MIDI in: no devices found (pair Bluetooth MIDI in Windows Settings first)");
-   #endif
-    inputs.setText (names.isEmpty() ? noMidi
-                                    : "MIDI in, listening to all: " + names.joinIntoString (", "),
-                    juce::dontSendNotification);
 
     feedbackOut.clear (juce::dontSendNotification);
     feedbackOut.addItem ("None", 1);
@@ -218,36 +226,62 @@ void ControlsPanel::paint (juce::Graphics& g)
     g.drawText ("COMMANDS", 16, viewport.getY() - 26, 200, 22, juce::Justification::centredLeft);
 }
 
+int ControlsPanel::getIdealHeight (int width) const
+{
+    const int boxHeight = touch ? 40 : 28;
+    return 12 + midiInputs.getIdealHeight() + (touch ? 32 : 22) + 6 + boxHeight + (narrow (width) ? 6 + boxHeight : 0)
+         + 34 + rows.size() * rowHeight (width) + 2 + 8 + 44 + 12;
+}
+
 void ControlsPanel::resized()
 {
-    auto r = getLocalBounds().reduced (16, 12);
-   #if JUCE_ANDROID
-    inputs.setBounds (r.removeFromTop (22));
-    lastMidi.setBounds (r.removeFromTop (22));
-   #else
+    auto r = getLocalBounds().reduced (touch ? 8 : 16, 12);
+    const int line = touch ? 32 : 22;
+   #if ! JUCE_ANDROID
     global.setBounds (r.removeFromTop (26));
     refused.setBounds (r.removeFromTop (refused.getText().isEmpty() ? 0 : 22));
     r.removeFromTop (6);
-    inputs.setBounds (r.removeFromTop (22));
-    lastMidi.setBounds (r.removeFromTop (22));
+   #endif
+    midiInputs.setBounds (r.removeFromTop (midiInputs.getIdealHeight()));
+    lastMidi.setBounds (r.removeFromTop (line));
+   #if ! JUCE_ANDROID
     deckStatus.setBounds (r.removeFromTop (22));
    #endif
     r.removeFromTop (6);
-    auto fb = r.removeFromTop (28);
+    const int boxHeight = touch ? 40 : 28;
+    auto fb = r.removeFromTop (boxHeight);
     feedbackLabel.setBounds (fb.removeFromLeft (120));
-    feedbackOut.setBounds (fb.removeFromLeft (230));
+    feedbackOut.setBounds (narrow() ? fb : fb.removeFromLeft (230));
+    if (narrow())
+    {
+        r.removeFromTop (6);
+        fb = r.removeFromTop (boxHeight);
+    }
+    const int levelWidth = narrow() ? fb.getWidth() / 3 : 120;
     for (auto [label, slider] : { std::pair { &playingLabel, &playing }, std::pair { &nextLabel, &next }, std::pair { &loadedLabel, &loaded } })
     {
-        label->setBounds (fb.removeFromLeft (64));
-        fb.removeFromLeft (4);
-        slider->setBounds (fb.removeFromLeft (52));
+        auto cell = fb.removeFromLeft (levelWidth);
+        label->setBounds (cell.removeFromLeft (64));
+        cell.removeFromLeft (4);
+        slider->setBounds (cell.removeFromLeft (52));
     }
-    auto bottom = r.removeFromBottom (30);
-    reset.setBounds (bottom.removeFromRight (170));
-    r.removeFromBottom (8);
-    r.removeFromTop (34);
-    viewport.setBounds (r);
-    const int rowH = 32;
+    const int rowH = rowHeight();
+    if (touch)
+    {
+        // the phone page scrolls the whole panel (getIdealHeight): the commands list is as tall as it needs
+        r.removeFromTop (34);
+        viewport.setBounds (r.removeFromTop (rows.size() * rowH + 2));
+        r.removeFromTop (8);
+        reset.setBounds (r.removeFromTop (44).removeFromRight (juce::jmin (220, r.getWidth())));
+    }
+    else
+    {
+        auto bottom = r.removeFromBottom (30);
+        reset.setBounds (bottom.removeFromRight (170));
+        r.removeFromBottom (8);
+        r.removeFromTop (34);
+        viewport.setBounds (r);
+    }
     list.setSize (viewport.getMaximumVisibleWidth(), rows.size() * rowH);
     for (int i = 0; i < rows.size(); ++i)
         rows[i]->setBounds (0, i * rowH, list.getWidth() - 4, rowH);

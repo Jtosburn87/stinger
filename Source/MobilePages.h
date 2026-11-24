@@ -7,6 +7,9 @@
 #include "PlaylistPanel.h"
 #include "WaveformEditor.h"
 #include "StockFx.h"
+#include "ControlSurface.h"
+#include "ControlsWindow.h"
+#include "MidiInputList.h"
 
 /** A text box inside a scrolling page: a tap brings up the keyboard, a swipe that starts on it only scrolls. */
 struct MobileTextEditor : juce::TextEditor
@@ -49,6 +52,8 @@ public:
     ~MobileEditorPage() override;
 
     void setCue (int id);
+    /** For the button's own key / MIDI row (Learn, Clear). */
+    void setControlSurface (ControlSurface* surface);
     std::function<void()> onBack;
     /** The system file picker, for this button. Cancelled with backIfCancelled, it goes back a page. */
     void chooseAudio (bool backIfCancelled);
@@ -97,6 +102,10 @@ private:
     juce::ComboBox output;
     MobileRow level { "Level" }, pan { "Pan" }, fadeIn { "Fade in" }, fadeOut { "Fade out" }, stopFade { "Stop fade" };
     juce::ToggleButton loop { "Loop" }, fadeOthers { "Fade others when played" };
+    ControlSurface* surface = nullptr;
+    juce::Label midiBinding;
+    juce::TextButton midiLearn { "Learn" }, midiClear { "Clear" };
+    void visibilityChanged() override;
 
     EffectSection eq, compressor, limiter;
 
@@ -107,7 +116,7 @@ private:
 class MobileAudioPage : public juce::Component
 {
 public:
-    explicit MobileAudioPage (ShowController& controller);
+    MobileAudioPage (ShowController& controller, ControlSurface& surface);
     std::function<void()> onBack;
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -116,6 +125,24 @@ private:
     juce::TextButton backButton { juce::String::fromUTF8 ("\xe2\x80\xb9 Back") };
     juce::Label title;
     juce::AudioDeviceSelectorComponent selector;
+    MidiInputList midiInputs;
+};
+
+/** MIDI and keys: which MIDI inputs, light feedback, and every command's key / MIDI with Learn (the Controls window
+    of the computer app, in a page that scrolls). */
+class MobileControlsPage : public juce::Component
+{
+public:
+    explicit MobileControlsPage (ControlSurface& surface);
+    std::function<void()> onBack;
+    void paint (juce::Graphics&) override;
+    void resized() override;
+
+private:
+    juce::TextButton backButton { juce::String::fromUTF8 ("\xe2\x80\xb9 Back") };
+    juce::Label title;
+    juce::Viewport viewport;
+    ControlsPanel panel;
 };
 
 /** The main page: banks, the button grid, and Playlist and Now Playing, each of which folds away to a strip
@@ -132,6 +159,7 @@ public:
     std::function<void (int id)> onOpenEditor;
     std::function<void (int id)> onChooseSong;
     std::function<void()> onOpenAudio;
+    std::function<void()> onOpenControls;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -189,7 +217,7 @@ class MobileRoot : public juce::Component,
                    public juce::DragAndDropContainer
 {
 public:
-    MobileRoot (ShowController& controller, juce::PropertiesFile& settings);
+    MobileRoot (ShowController& controller, juce::PropertiesFile& settings, ControlSurface& surface);
 
     void resized() override;
     void paint (juce::Graphics&) override;
@@ -207,6 +235,7 @@ private:
     MobileMainPage mainPage;
     MobileEditorPage editorPage;
     MobileAudioPage audioPage;
+    MobileControlsPage controlsPage;
 
 public:
     MobileMainPage& getMainPage() { return mainPage; }

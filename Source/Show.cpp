@@ -27,6 +27,7 @@ void Show::reset()
     }
     playlists.clear();
     playlists.push_back ({ "Playlist 1", {} });
+    songs.clear();
     run.clear();
     schedule.clear();
     playbackMode = PlaybackMode::oneAtATime;
@@ -52,11 +53,20 @@ juce::var Show::toVar() const
         bankList.add (bank);
     }
     root->setProperty ("banks", bankList);
+    if (! songs.empty())
+    {
+        juce::Array<juce::var> songList;   // index = place (an empty one is null)
+        for (auto& c : songs)
+            songList.add (c.isEmpty() ? juce::var() : c.toVar());
+        root->setProperty ("songs", songList);
+    }
     juce::Array<juce::var> playlistList;
     for (auto& p : playlists)
     {
         auto* list = new juce::DynamicObject();
         list->setProperty ("name", p.name);
+        if (p.preshow)
+            list->setProperty ("preshow", true);
         juce::Array<juce::var> entries;
         for (auto& e : p.entries)
         {
@@ -98,6 +108,10 @@ bool Show::fromVar (const juce::var& v)
                     b.cues[(size_t) i] = Cue::fromVar ((*cues)[i]);
             banks.push_back (b);
         }
+    songs.clear();
+    if (auto* list = v.getProperty ("songs", {}).getArray())
+        for (auto& sv : *list)
+            songs.push_back (Cue::fromVar (sv));
     playlists.clear();
     int uid = 0;
     if (auto* list = v.getProperty ("playlists", {}).getArray())
@@ -105,6 +119,7 @@ bool Show::fromVar (const juce::var& v)
         {
             Playlist p;
             p.name = pv.getProperty ("name", {}).toString();
+            p.preshow = (bool) pv.getProperty ("preshow", false);
             if (auto* entries = pv.getProperty ("entries", {}).getArray())
                 for (auto& ev : *entries)
                 {
@@ -144,6 +159,21 @@ static void forEachCueVar (const juce::var& v, std::function<void (const juce::v
                 for (int i = 0; i < cues->size(); ++i)
                     if ((*cues)[i].isObject())
                         f ((*cues)[i], b, i);
+    if (auto* songs = v.getProperty ("songs", {}).getArray())   // playlist songs: bank -1
+        for (int i = 0; i < songs->size(); ++i)
+            if ((*songs)[i].isObject())
+                f ((*songs)[i], -1, i);
+}
+
+std::vector<int> Show::allCueIds() const
+{
+    std::vector<int> ids;
+    for (int b = 0; b < (int) banks.size(); ++b)
+        for (int s = 0; s < cuesPerBank; ++s)
+            ids.push_back (cueId (b, s));
+    for (int i = 0; i < (int) songs.size(); ++i)
+        ids.push_back (songBase + i);
+    return ids;
 }
 
 bool Show::save (const juce::File& f, juce::String& error) const
@@ -180,9 +210,9 @@ bool Show::load (const juce::File& f, juce::String& error)
     forEachCueVar (v, [this, &folder] (const juce::var& cue, int b, int i)
     {
         const auto rel = cue.getProperty ("fileRel", {}).toString();
-        if (rel.isEmpty() || b >= (int) banks.size() || i >= cuesPerBank)
+        if (rel.isEmpty() || b >= (int) banks.size() || i >= (b < 0 ? (int) songs.size() : cuesPerBank))
             return;
-        auto& c = banks[(size_t) b].cues[(size_t) i];
+        auto& c = b < 0 ? songs[(size_t) i] : banks[(size_t) b].cues[(size_t) i];
         if (! c.file.existsAsFile())
             if (auto moved = folder.getChildFile (rel); moved.existsAsFile())
                 c.file = moved;
@@ -242,25 +272,23 @@ void ShowController::moveUnsavedAudio (const juce::File& audioFolder)
 {
     const auto unsaved = getAudioFolder();
     std::map<juce::String, juce::File> moved;   // old path -> new (buttons can share a file)
-    for (int b = 0; b < (int) show.banks.size(); ++b)
-        for (int s = 0; s < Show::cuesPerBank; ++s)
+    for (const int id : show.allCueIds())
+    {
+        auto& c = show.cue (id);
+        if (! c.file.isAChildOf (unsaved))
+            continue;
+        const auto key = c.file.getFullPathName();
+        if (moved.count (key) == 0)
         {
-            const int id = Show::cueId (b, s);
-            auto& c = show.cue (id);
-            if (! c.file.isAChildOf (unsaved))
-                continue;
-            const auto key = c.file.getFullPathName();
-            if (moved.count (key) == 0)
-            {
-                auto target = audioFolder.getChildFile (c.file.getFileName());
-                if (target.exists())
-                    target = target.getNonexistentSibling();
-                moved[key] = audioFolder.createDirectory() && c.file.moveFileTo (target) ? target : c.file;
-            }
-            c.file = moved[key];
-            if (loading.count (id) > 0)
-                loadAudio (id);   // a load on its way was for the old place
+            auto target = audioFolder.getChildFile (c.file.getFileName());
+            if (target.exists())
+                target = target.getNonexistentSibling();
+            moved[key] = audioFolder.createDirectory() && c.file.moveFileTo (target) ? target : c.file;
         }
+        c.file = moved[key];
+        if (loading.count (id) > 0)
+            loadAudio (id);   // a load on its way was for the old place
+    }
 }
 
 void ShowController::assignFile (int id, const juce::File& original)
@@ -559,10 +587,9 @@ bool ShowController::loadNow (int id, juce::String& error)
 void ShowController::reloadAll()
 {
     loadedRate = engine.getSampleRate();
-    for (int b = 0; b < (int) show.banks.size(); ++b)
-        for (int s = 0; s < Show::cuesPerBank; ++s)
-            if (! show.cue (Show::cueId (b, s)).isEmpty())
-                loadAudio (Show::cueId (b, s));
+    for (const int id : show.allCueIds())
+        if (! show.cue (id).isEmpty())
+            loadAudio (id);
 }
 
 void ShowController::retire (std::shared_ptr<CueAudio> audio)
@@ -584,7 +611,7 @@ void ShowController::updateSelfDestruct()
 {
     std::set<int> playing;
     for (auto& v : engine.getVoices())
-        if (! v.preview)
+        if (! v.preview && ! Show::isSong (v.cueId))   // playlist songs have no button to go black
             playing.insert (v.cueId);
     if (show.selfDestruct)
         destructing.insert (playing.begin(), playing.end());
@@ -772,10 +799,9 @@ bool ShowController::openShow (const juce::File& f, juce::String& error)
     newShow();
     show = loaded;
     missingPlugins.clear();
-    for (int b = 0; b < (int) show.banks.size(); ++b)
-        for (int s = 0; s < Show::cuesPerBank; ++s)
-            if (show.cue (Show::cueId (b, s)).hasPlugins())
-                createPlugins (Show::cueId (b, s));
+    for (const int id : show.allCueIds())
+        if (show.cue (id).hasPlugins())
+            createPlugins (id);
     assignUids();
     assignRunUids();
     showFile = f;
@@ -845,6 +871,8 @@ std::vector<ShowIssue> ShowController::checkShow() const
     auto label = [this] (int id)
     {
         const auto& c = show.cue (id);
+        if (Show::isSong (id))
+            return "Playlist song \"" + c.name + "\"";
         return "Button " + juce::String::charToString ((juce::juce_wchar) ('A' + Show::bankOf (id))) + juce::String (Show::slotOf (id) + 1)
              + (c.name.isNotEmpty() ? " \"" + c.name + "\"" : juce::String());
     };
@@ -853,10 +881,8 @@ std::vector<ShowIssue> ShowController::checkShow() const
     if (outputs <= 0)
         add (ShowIssue::Kind::noDevice, -1, "No audio device is open.");
 
-    for (int b = 0; b < (int) show.banks.size(); ++b)
-        for (int s = 0; s < Show::cuesPerBank; ++s)
+    for (const int id : show.allCueIds())
         {
-            const int id = Show::cueId (b, s);
             const auto& c = show.cue (id);
             if (c.isEmpty())
                 continue;
@@ -887,7 +913,8 @@ std::vector<ShowIssue> ShowController::checkShow() const
         const auto& list = show.playlists[(size_t) p];
         for (int i = 0; i < (int) list.entries.size(); ++i)
             if (const int id = list.entries[(size_t) i].cueId; ! show.isValid (id) || show.cue (id).isEmpty())
-                add (ShowIssue::Kind::emptyEntry, id, list.displayName (p) + ", song " + juce::String (i + 1) + ": its button is empty.");
+                add (ShowIssue::Kind::emptyEntry, id, list.displayName (p) + ", song " + juce::String (i + 1)
+                     + (Show::isSong (id) ? juce::String (": its song is missing.") : juce::String (": its button is empty.")));
     }
     for (int i = 0; i < (int) show.run.size(); ++i)
         if (const int id = show.run[(size_t) i].cueId; id >= 0 && (! show.isValid (id) || show.cue (id).isEmpty()))
@@ -906,17 +933,13 @@ void ShowController::relinkFile (juce::File from, const juce::File& to)
     if (from == to)
         return;
     bool changed = false;
-    for (int b = 0; b < (int) show.banks.size(); ++b)
-        for (int s = 0; s < Show::cuesPerBank; ++s)
+    for (const int id : show.allCueIds())
+        if (auto& c = show.cue (id); c.file == from)
         {
-            const int id = Show::cueId (b, s);
-            if (auto& c = show.cue (id); c.file == from)
-            {
-                c.file = to;
-                errors.erase (id);
-                loadAudio (id);
-                changed = true;
-            }
+            c.file = to;
+            errors.erase (id);
+            loadAudio (id);
+            changed = true;
         }
     if (changed)
     {
@@ -988,6 +1011,10 @@ juce::var ShowController::positionVar() const
     for (int p = 0; p < (int) show.playlists.size(); ++p)
         next.add (getNextEntry (p));
     info->setProperty ("next", next);
+    juce::Array<juce::var> resumes;   // preshow: [entry, seconds] per playlist (entry -1 = none)
+    for (int p = 0; p < (int) show.playlists.size(); ++p)
+        resumes.add (juce::Array<juce::var> { getResumeEntry (p), getResumeSeconds (p) });
+    info->setProperty ("resume", resumes);
     info->setProperty ("runNext", getRunNext());
     info->setProperty ("runOnAir", getRunOnAir());
     info->setProperty ("scheduleRunning", scheduleRunning);
@@ -1012,6 +1039,14 @@ void ShowController::applyPosition (const juce::var& info)
         for (int p = 0; p < std::min (next->size(), (int) show.playlists.size()); ++p)
             if ((int) (*next)[p] >= 0)
                 setNextEntry (p, (int) (*next)[p]);
+    if (auto* resumes = info.getProperty ("resume", {}).getArray())
+        for (int p = 0; p < std::min (resumes->size(), (int) show.playlists.size()); ++p)
+        {
+            auto& list = show.playlists[(size_t) p];
+            const int entry = (int) (*resumes)[p][0];
+            list.resumeUid = entry >= 0 && entry < (int) list.entries.size() ? list.entries[(size_t) entry].uid : 0;
+            list.resumeSeconds = (double) (*resumes)[p][1];
+        }
     if (const int r = (int) info.getProperty ("runNext", -1); r >= 0 && r < (int) show.run.size())
         runNextUid = show.run[(size_t) r].uid;
     else
@@ -1046,47 +1081,58 @@ void ShowController::applyMirror (const juce::var& incoming, const std::function
     Show next;
     if (! next.fromVar (incoming))
         return;
+    auto mirrorCue = [&] (int id)
+    {
+        auto c = next.cue (id);
+        c.file = c.isEmpty() ? juce::File() : localFile (c.file);
+        auto& mine = show.cue (id);
+        const bool newFile = mine.file != c.file;
+        bool newPlugins = false;
+        for (size_t p = 0; p < c.plugins.size(); ++p)
+            newPlugins = newPlugins || c.plugins[p].description != mine.plugins[p].description || c.plugins[p].state != mine.plugins[p].state;
+        mine = c;
+        if (newFile)
+        {
+            engine.stopCue (id, false);
+            if (auto it = media.find (id); it != media.end())
+            {
+                retire (it->second);
+                media.erase (it);
+            }
+            errors.erase (id);
+            loading.erase (id);
+            loadAudio (id);
+        }
+        if (newPlugins)
+        {
+            retireFx (id);
+            if (c.hasPlugins())
+                createPlugins (id);
+        }
+    };
     while (show.banks.size() < next.banks.size())
         show.banks.emplace_back();
     for (int b = 0; b < (int) next.banks.size(); ++b)
     {
         show.banks[(size_t) b].name = next.banks[(size_t) b].name;
         for (int s = 0; s < Show::cuesPerBank; ++s)
-        {
-            const int id = Show::cueId (b, s);
-            auto c = next.cue (id);
-            c.file = c.isEmpty() ? juce::File() : localFile (c.file);
-            auto& mine = show.cue (id);
-            const bool newFile = mine.file != c.file;
-            bool newPlugins = false;
-            for (size_t p = 0; p < c.plugins.size(); ++p)
-                newPlugins = newPlugins || c.plugins[p].description != mine.plugins[p].description || c.plugins[p].state != mine.plugins[p].state;
-            mine = c;
-            if (newFile)
-            {
-                engine.stopCue (id, false);
-                if (auto it = media.find (id); it != media.end())
-                {
-                    retire (it->second);
-                    media.erase (it);
-                }
-                errors.erase (id);
-                loading.erase (id);
-                loadAudio (id);
-            }
-            if (newPlugins)
-            {
-                retireFx (id);
-                if (c.hasPlugins())
-                    createPlugins (id);
-            }
-        }
+            mirrorCue (Show::cueId (b, s));
     }
     while (show.banks.size() > next.banks.size())
     {
         for (int s = 0; s < Show::cuesPerBank; ++s)
             clearCue (Show::cueId ((int) show.banks.size() - 1, s));
         show.banks.pop_back();
+    }
+    // playlist songs the same way
+    while (show.songs.size() < next.songs.size())
+        show.songs.emplace_back();
+    for (int i = 0; i < (int) next.songs.size(); ++i)
+        mirrorCue (Show::songBase + i);
+    while (show.songs.size() > next.songs.size())
+    {
+        clearCue (Show::songBase + (int) show.songs.size() - 1);
+        show.songs.pop_back();
     }
     show.playlists = next.playlists;
     show.run = next.run;

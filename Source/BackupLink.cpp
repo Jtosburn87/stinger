@@ -466,18 +466,17 @@ void BackupLink::tickMain()
             juce::Array<juce::var> files;
             std::set<juce::String> seen;
             const auto& s = controller.getShow();
-            for (auto& bank : s.banks)
-                for (auto& cue : bank.cues)
-                    if (cue.file.existsAsFile() && seen.insert (cue.file.getFullPathName()).second)
-                    {
-                        auto* o = new juce::DynamicObject();
-                        o->setProperty ("i", (int) manifest.size());
-                        o->setProperty ("path", cue.file.getFullPathName());
-                        o->setProperty ("name", cue.file.getFileName());
-                        o->setProperty ("size", cue.file.getSize());
-                        files.add (o);
-                        manifest.push_back (cue.file);
-                    }
+            for (const int id : s.allCueIds())   // buttons and playlist songs
+                if (const auto& cue = s.cue (id); cue.file.existsAsFile() && seen.insert (cue.file.getFullPathName()).second)
+                {
+                    auto* o = new juce::DynamicObject();
+                    o->setProperty ("i", (int) manifest.size());
+                    o->setProperty ("path", cue.file.getFullPathName());
+                    o->setProperty ("name", cue.file.getFileName());
+                    o->setProperty ("size", cue.file.getSize());
+                    files.add (o);
+                    manifest.push_back (cue.file);
+                }
             connection->send ("{\"t\":\"show\",\"show\":" + show + ",\"files\":" + juce::JSON::toString (juce::var (files), true) + "}");
         }
     }

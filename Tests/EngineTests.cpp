@@ -1865,6 +1865,102 @@ static void testPlaylists()
            && sc.getNextEntry (0) >= 0, "delete a playlist: the others keep their songs and state");
 }
 
+static void testPreshow()
+{
+    std::puts ("Preshow playlists");
+    PlaybackEngine e;
+    e.prepareForTest (rate, 2);
+    Outputs out (2);
+    ShowController sc (e);
+    auto& show = sc.getShow();
+    auto tick = [&] (int blocks) { for (int b = 0; b < blocks; ++b) { out.run (e); sc.updatePlaylist(); } };
+    auto position = [&] { return e.getVoices().empty() ? -1.0 : e.getVoices().front().position; };
+
+    // two songs of the playlist's own (on no button), 1 s each
+    for (int i = 0; i < 2; ++i)
+    {
+        show.songs.push_back (monoOut (0));
+        show.songs.back().name = "Walk-in " + juce::String (i + 1);
+        sc.setAudioForTest (Show::songBase + i, constant (1, 1.0, i == 0 ? 0.1f : 0.2f));
+        sc.addToPlaylist (0, Show::songBase + i);
+    }
+    check (show.playlists[0].entries.size() == 2 && show.cue (Show::songBase + 1).name == "Walk-in 2", "songs on no button go in a playlist");
+    sc.setPreshow (0, true);
+
+    sc.go (0);
+    tick (40);   // 0.4 s into song 1
+    e.stopAll (true);
+    tick (150);
+    check (e.getVoices().empty() && sc.getResumeEntry (0) == 0 && near ((float) sc.getResumeSeconds (0), 0.4f, 0.03f)
+           && sc.getNextEntry (0) == 0, "stopped part way: GO will resume song 1 there");
+    sc.go (0);
+    tick (1);
+    check (e.getVoices().size() == 1 && near ((float) position(), 0.41f, 0.03f) && sc.getResumeEntry (0) == -1,
+           "GO picks it up where it stopped");
+    tick (200);   // the rest of song 1, then song 2 to its end
+    check (e.getVoices().empty() && sc.getResumeEntry (0) == -1, "played to its end: nothing to resume");
+
+    // cut off with no fade, and a button taking over: both count as stopped
+    sc.setNextEntry (0, 0);
+    sc.go (0);
+    tick (25);
+    e.stopAll (false);
+    tick (3);
+    check (sc.getResumeEntry (0) == 0 && near ((float) sc.getResumeSeconds (0), 0.25f, 0.03f), "stopped with no fade: resumes too");
+    show.cue (0) = monoOut (0);
+    sc.setAudioForTest (0, constant (1, 0.3, 0.5f));
+    sc.setNextEntry (0, 1);
+    sc.go (0);
+    tick (30);
+    sc.play (0);   // one at a time: the button takes over
+    tick (150);
+    check (sc.getResumeEntry (0) == 1 && near ((float) sc.getResumeSeconds (0), 0.3f, 0.03f), "a button taking over: song 2 resumes later");
+
+    sc.setNextEntry (0, 0);
+    check (sc.getResumeEntry (0) == -1 && sc.getNextEntry (0) == 0, "picking a song by hand: it plays from the top");
+
+    // off: GO moves on as before
+    sc.setPreshow (0, false);
+    sc.go (0);
+    tick (30);
+    e.stopAll (true);
+    tick (150);
+    check (sc.getResumeEntry (0) == -1 && sc.getNextEntry (0) == 1, "without Preshow a stopped song isn't resumed");
+    sc.setPreshow (0, true);
+
+    // saved in the show
+    Show t;
+    t.fromVar (juce::JSON::parse (juce::JSON::toString (show.toVar())));
+    check (t.playlists[0].preshow && t.songs.size() == 2 && t.playlists[0].entries[1].cueId == Show::songBase + 1
+           && t.songs[1].name == "Walk-in 2", "Preshow and its songs saved in the show");
+
+    // a file dropped in: copied to the Audio folder, on no button
+    juce::TemporaryFile home;
+    home.getFile().createDirectory();
+    sc.setHomeFolderForTest (home.getFile());
+    const auto wav = home.getFile().getChildFile ("Doors open.wav");
+    {
+        juce::WavAudioFormat format;
+        std::unique_ptr<juce::AudioFormatWriter> writer (format.createWriterFor (new juce::FileOutputStream (wav), 48000.0, 1, 24, {}, 0));
+        juce::AudioBuffer<float> buf (1, 4800);
+        buf.clear();
+        writer->writeFromAudioSampleBuffer (buf, 0, buf.getNumSamples());
+    }
+    sc.addSongToPlaylist (0, wav, 0);
+    bool onButton = false;   // (button 0 is the one used above)
+    for (int b = 0; b < (int) show.banks.size(); ++b)
+        for (int s = 0; s < Show::cuesPerBank; ++s)
+            onButton = onButton || (Show::cueId (b, s) != 0 && ! show.cue (Show::cueId (b, s)).isEmpty());
+    const int added = show.playlists[0].entries[0].cueId;
+    check (Show::isSong (added) && show.cue (added).name == "Doors open" && show.cue (added).file.isAChildOf (sc.getAudioFolder())
+           && ! onButton, "a dropped file goes in as a song of its own, copied into the Audio folder");
+
+    // removing a song from the playlist lets it go
+    sc.removeEntry (0, 0);
+    check (show.cue (added).isEmpty() && ! show.cue (Show::songBase + 1).isEmpty(), "a removed song is dropped from the show");
+    home.getFile().deleteRecursively();
+}
+
 static void testControls()
 {
     std::puts ("Keys and MIDI");
@@ -2957,6 +3053,7 @@ int main (int argc, char** argv)
     testBackupLink();
     testSelfDestruct();
     testPlaylists();
+    testPreshow();
     testControls();
     testStreamDeck();
     testRemoteServer();

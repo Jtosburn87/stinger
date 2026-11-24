@@ -40,8 +40,23 @@ public:
     void cancelLearn();
     juce::String learning() const { return learnTarget; }
 
+    /** The inputs being listened to now. */
     juce::StringArray getInputNames() const;
     juce::String getLastMidi() const { return lastMidi; }
+
+    /** Which MIDI inputs Stinger listens to. "All inputs": every one, new ones too. Otherwise only the ticked ones;
+        a device seen for the first time stays off until ticked, a ticked one comes back by itself when it reconnects. */
+    struct InputChoice
+    {
+        juce::String name, identifier;
+        bool connected = false;   // plugged in / paired right now
+        bool on = false;          // ticked (all of them while "All inputs" is on)
+    };
+    /** Connected inputs, then ticked ones that aren't connected. */
+    std::vector<InputChoice> getInputChoices() const;
+    bool isAllInputs() const { return allInputs; }
+    void setAllInputs (bool on);
+    void setInputOn (const InputChoice& input, bool on);
 
     /** Light feedback for controllers with lit pads: velocities sent to each bound note / CC. */
     juce::Array<juce::MidiDeviceInfo> getOutputs() const { return juce::MidiOutput::getAvailableDevices(); }
@@ -78,6 +93,11 @@ private:
     juce::String lastMidi;
 
     std::vector<std::unique_ptr<juce::MidiInput>> inputs;
+    bool allInputs = true;
+    struct TickedInput { juce::String identifier, name; };
+    std::vector<TickedInput> tickedInputs;   // used while allInputs is off; matched by identifier, else by name
+    bool isTicked (const juce::String& identifier, const juce::String& name) const;
+    juce::StringArray lastAvailable;         // to tell the windows when the device list changes
     juce::String feedbackId;
     std::unique_ptr<juce::MidiOutput> feedback;
     FeedbackLevels levels;

@@ -26,7 +26,9 @@ class MainComponent : public juce::Component,
                       private juce::ChangeListener
 {
 public:
-    MainComponent (ShowController& controller, juce::PropertiesFile& settings);
+    /** sharedSurface: Android passes the one MIDI / key listener the phone pages also use (a device must not be
+        opened twice); the computer app leaves it out and the window has its own. */
+    MainComponent (ShowController& controller, juce::PropertiesFile& settings, ControlSurface* sharedSurface = nullptr);
     ~MainComponent() override;
 
     void paint (juce::Graphics&) override;
@@ -61,7 +63,8 @@ private:
 
     ShowController& controller;
     juce::PropertiesFile& settings;
-    ControlSurface surface;
+    std::unique_ptr<ControlSurface> ownSurface;
+    ControlSurface& surface;
     StreamDeckServer streamDeck;
     Remote remote;
     CueGrid grid;
