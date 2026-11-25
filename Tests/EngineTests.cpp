@@ -1406,7 +1406,9 @@ static void testScheduleRealTime()
     show.playbackMode = PlaybackMode::overlap;
     auto pump = [&] (std::function<bool()> done, int ms)
     {
-        for (int waited = 0; waited < ms && ! done(); waited += 10)
+        // by the real clock: one turn takes 40 ms or more on a slow machine (GitHub's Macs)
+        const auto end = juce::Time::getMillisecondCounterHiRes() + ms;
+        while (juce::Time::getMillisecondCounterHiRes() < end && ! done())
         {
             out->run (*e);
             juce::MessageManager::getInstance()->runDispatchLoopUntil (10);
@@ -1416,15 +1418,22 @@ static void testScheduleRealTime()
 
     sc.addScheduleItem (ScheduleItem::make (0, ScheduleItem::delay, juce::Time::getCurrentTime()));
     show.schedule[0].delaySeconds = 0.5;
-    auto clock = ScheduleItem::make (1, ScheduleItem::clock, juce::Time::getCurrentTime());
-    const auto soon = juce::Time::getCurrentTime() + juce::RelativeTime::seconds (2.0);
-    clock.secondsOfDay = soon.getHours() * 3600 + soon.getMinutes() * 60 + soon.getSeconds();
-    sc.addScheduleItem (clock);
+    sc.addScheduleItem (ScheduleItem::make (1, ScheduleItem::clock, juce::Time::getCurrentTime()));
     pump ([] { return false; }, 900);
     check (! e->isCuePlaying (0), "nothing plays before START");
+    // The clock time is picked only now, so a slow machine can't reach it before START (a time already past
+    // is missed). Not across midnight either: a time of day means today.
+    auto secondsNow = []
+    {
+        const auto now = juce::Time::getCurrentTime();
+        return now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+    };
+    while (secondsNow() > 86390)
+        juce::Thread::sleep (200);
+    show.schedule[1].secondsOfDay = secondsNow() + 3;
     sc.startSchedule();
-    check (pump ([&] { return e->isCuePlaying (0); }, 1500), "a delay trigger plays by itself");
-    check (pump ([&] { return e->isCuePlaying (1); }, 4000), "a clock time plays by itself");
+    check (pump ([&] { return e->isCuePlaying (0); }, 5000), "a delay trigger plays by itself");
+    check (pump ([&] { return e->isCuePlaying (1); }, 8000), "a clock time plays by itself");
     check (show.schedule[0].state == ScheduleItem::fired && show.schedule[1].state == ScheduleItem::fired, "both marked as played");
 
     // nothing to play must not look as if it worked
@@ -1435,7 +1444,7 @@ static void testScheduleRealTime()
     sc.addScheduleItem (ScheduleItem::make (9, ScheduleItem::delay, juce::Time::getCurrentTime()));
     show.schedule[0].delaySeconds = 0.2;
     sc.startSchedule();
-    pump ([&] { return show.schedule[0].state != ScheduleItem::waiting; }, 1500);
+    pump ([&] { return show.schedule[0].state != ScheduleItem::waiting; }, 5000);
     check (show.schedule[0].state == ScheduleItem::missed && sc.getMissedCount() == 1, "a trigger on an empty button shows as missed, not played");
     sc.stopSchedule();
 
