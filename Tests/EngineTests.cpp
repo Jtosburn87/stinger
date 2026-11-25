@@ -1269,7 +1269,8 @@ static void testBackupLink()
     check (drift() < 0.1, "a jump on the main laptop is followed");
 
     mainEngine->stopCue (0, false);
-    check (until ([&] { return ! backupEngine->isCuePlaying (0); }, 1500), "stopped on main: stopped here");
+    // the 1 s stop fade is 100 blocks, and a slow machine (GitHub's Macs) only gets through one block per 20 ms step
+    check (until ([&] { return ! backupEngine->isCuePlaying (0); }, 6000), "stopped on main: stopped here");
 
     // changes come across while connected, and the file isn't sent twice
     const auto stamp = copy.file.getLastModificationTime();
